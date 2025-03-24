@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:palette_master/core/color_models/color_mixer.dart';
 import 'package:palette_master/features/puzzles/models/puzzle.dart';
+import 'package:palette_master/features/puzzles/providers/puzzle_provider.dart';
 import 'package:palette_master/features/puzzles/widgets/color_preview.dart';
 import 'package:vibration/vibration.dart';
 

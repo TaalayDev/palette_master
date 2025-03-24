@@ -29,7 +29,7 @@ class _GameSelectionScreenState extends ConsumerState<GameSelectionScreen> with 
       'description': 'Mix colors by dragging and dropping pigments into the mixing container.',
       'icon': Icons.palette,
       'color': Colors.purple,
-      'route': AppRoutes.puzzles,
+      'route': AppRoutes.classicMixing,
       'params': {'enhanced': 'true'},
       'difficulty': 'Beginner',
       'features': ['Drag & Drop', 'Color Mixing', 'Basic Physics'],
@@ -40,7 +40,7 @@ class _GameSelectionScreenState extends ConsumerState<GameSelectionScreen> with 
       'description': 'Create colors by colliding bubbles with realistic physics.',
       'icon': Icons.bubble_chart,
       'color': Colors.blue,
-      'route': AppRoutes.puzzles,
+      'route': AppRoutes.colorBubble,
       'difficulty': 'Intermediate',
       'features': ['Drag & Collide', 'Advanced Physics', 'Particle Effects'],
       'gameType': 'bubblePhysics',
@@ -50,7 +50,7 @@ class _GameSelectionScreenState extends ConsumerState<GameSelectionScreen> with 
       'description': 'Balance complementary colors on a physics-based beam scale.',
       'icon': Icons.balance,
       'color': Colors.orange,
-      'route': AppRoutes.puzzles,
+      'route': AppRoutes.colorBalance,
       'difficulty': 'Intermediate',
       'features': ['Balance Physics', 'Complementary Colors', 'Weight Mechanics'],
       'gameType': 'colorBalance',
@@ -60,7 +60,7 @@ class _GameSelectionScreenState extends ConsumerState<GameSelectionScreen> with 
       'description': 'Create propagating color waves that interact and mix.',
       'icon': Icons.waves,
       'color': Colors.teal,
-      'route': AppRoutes.puzzles,
+      'route': AppRoutes.colorWave,
       'difficulty': 'Advanced',
       'features': ['Wave Propagation', 'Additive Color Mixing', 'Dynamic Interactions'],
       'gameType': 'colorWave',
@@ -70,7 +70,7 @@ class _GameSelectionScreenState extends ConsumerState<GameSelectionScreen> with 
       'description': 'Race through a track collecting colors to mix your car\'s paint.',
       'icon': Icons.directions_car,
       'color': Colors.red,
-      'route': AppRoutes.puzzles,
+      'route': AppRoutes.colorRacer,
       'difficulty': 'Advanced',
       'features': ['Racing Gameplay', 'Obstacle Avoidance', 'Collection Mechanics'],
       'gameType': 'colorRacer',
@@ -80,7 +80,7 @@ class _GameSelectionScreenState extends ConsumerState<GameSelectionScreen> with 
       'description': 'Test your color memory by repeating increasingly complex sequences.',
       'icon': Icons.memory,
       'color': Colors.indigo,
-      'route': AppRoutes.puzzles,
+      'route': AppRoutes.colorMemory,
       'difficulty': 'Expert',
       'features': ['Pattern Memory', '3D Card Flipping', 'Progressive Difficulty'],
       'gameType': 'colorMemory',
@@ -464,9 +464,7 @@ class _GameSelectionScreenState extends ConsumerState<GameSelectionScreen> with 
                                         params['gameType'] = game['gameType'];
 
                                         // For direct game routes, use puzzleId parameter
-                                        if (route == AppRoutes.puzzles) {
-                                          params['id'] = _getPuzzleIdFromTitle(game['title']);
-                                        }
+                                        params['id'] = _getPuzzleIdFromTitle(game['title']);
 
                                         context.pushNamed(
                                           route.name,

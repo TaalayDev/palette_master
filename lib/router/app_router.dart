@@ -1,6 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:palette_master/features/puzzles/color_balance_screen.dart';
+import 'package:palette_master/features/puzzles/color_bubble_screen.dart';
+import 'package:palette_master/features/puzzles/color_memory_screen.dart';
+import 'package:palette_master/features/puzzles/color_racer_screen.dart';
+import 'package:palette_master/features/puzzles/color_wave_screen.dart';
 import 'package:palette_master/features/puzzles/game_selection_screen.dart';
+import 'package:palette_master/features/puzzles/games/color_wave.dart';
 import 'package:palette_master/features/puzzles/models/game_type.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:palette_master/features/home/home_screen.dart';
@@ -8,6 +14,7 @@ import 'package:palette_master/features/puzzles/puzzle_screen.dart';
 import 'package:palette_master/features/tutorials/tutorial_screen.dart';
 import 'package:palette_master/features/achievements/achievements_screen.dart';
 import 'package:palette_master/features/settings/settings_screen.dart';
+import '../features/puzzles/color_mixing_screen.dart';
 import 'routes.dart';
 
 part 'app_router.g.dart';
@@ -110,12 +117,83 @@ GoRouter appRouter(AppRouterRef ref) {
         name: AppRoutes.settings.name,
         builder: (context, state) => const SettingsScreen(),
       ),
-
-      // Redirects
       GoRoute(
         path: AppRoutes.colorBubble.path,
         name: AppRoutes.colorBubble.name,
-        redirect: (context, state) => AppRoutes.puzzles.path,
+        builder: (context, state) {
+          final puzzleId = state.uri.queryParameters['id'] ?? 'color_matching';
+          final level = int.tryParse(state.uri.queryParameters['level'] ?? '1') ?? 1;
+
+          return ColorBubbleScreen(
+            puzzleId: puzzleId,
+            level: level,
+          );
+        },
+      ),
+      GoRoute(
+        path: AppRoutes.classicMixing.path,
+        name: AppRoutes.classicMixing.name,
+        builder: (context, state) {
+          final puzzleId = state.uri.queryParameters['id'] ?? 'color_matching';
+          final level = int.tryParse(state.uri.queryParameters['level'] ?? '1') ?? 1;
+
+          return ClassicMixingScreen(
+            puzzleId: puzzleId,
+            level: level,
+          );
+        },
+      ),
+      GoRoute(
+        path: AppRoutes.colorBalance.path,
+        name: AppRoutes.colorBalance.name,
+        builder: (context, state) {
+          final puzzleId = state.uri.queryParameters['id'] ?? 'color_matching';
+          final level = int.tryParse(state.uri.queryParameters['level'] ?? '1') ?? 1;
+
+          return ColorBalanceScreen(
+            puzzleId: puzzleId,
+            level: level,
+          );
+        },
+      ),
+      GoRoute(
+        path: AppRoutes.colorWave.path,
+        name: AppRoutes.colorWave.name,
+        builder: (context, state) {
+          final puzzleId = state.uri.queryParameters['id'] ?? 'color_matching';
+          final level = int.tryParse(state.uri.queryParameters['level'] ?? '1') ?? 1;
+
+          return ColorWaveScreen(
+            puzzleId: puzzleId,
+            level: level,
+          );
+        },
+      ),
+      GoRoute(
+        path: AppRoutes.colorRacer.path,
+        name: AppRoutes.colorRacer.name,
+        builder: (context, state) {
+          final puzzleId = state.uri.queryParameters['id'] ?? 'color_matching';
+          final level = int.tryParse(state.uri.queryParameters['level'] ?? '1') ?? 1;
+
+          return ColorRacerScreen(
+            puzzleId: puzzleId,
+            level: level,
+          );
+        },
+      ),
+      GoRoute(
+        path: AppRoutes.colorMemory.path,
+        name: AppRoutes.colorMemory.name,
+        builder: (context, state) {
+          final puzzleId = state.uri.queryParameters['id'] ?? 'color_matching';
+          final level = int.tryParse(state.uri.queryParameters['level'] ?? '1') ?? 1;
+
+          return ColorMemoryScreen(
+            puzzleId: puzzleId,
+            level: level,
+          );
+        },
       ),
     ],
   );

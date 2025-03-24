@@ -36,6 +36,7 @@ class PuzzleState extends _$PuzzleState {
         return _createOpticalIllusionPuzzle(level);
       case 'color_harmony':
         return _createColorHarmonyPuzzle(level);
+
       default:
         throw Exception('Unknown puzzle type: $puzzleId');
     }

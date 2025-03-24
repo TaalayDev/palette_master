@@ -85,6 +85,33 @@ class _PuzzleScreenState extends ConsumerState<PuzzleScreen> with TickerProvider
   }
 
   @override
+  void didUpdateWidget(PuzzleScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.level != widget.level) {
+      // Reset level state
+      setState(() {
+        _attempts = 0;
+        _showHint = false;
+        _showLevelComplete = false;
+      });
+
+      // Reset user color
+      ref.read(userMixedColorProvider.notifier).reset();
+    } else if (oldWidget.puzzleId != widget.puzzleId) {
+      // Reset level state
+      setState(() {
+        _attempts = 0;
+        _showHint = false;
+        _showLevelComplete = false;
+      });
+
+      // Reset user color
+      ref.read(userMixedColorProvider.notifier).reset();
+    }
+  }
+
+  @override
   void dispose() {
     _bounceController.dispose();
     _backgroundController.dispose();
@@ -735,7 +762,7 @@ class _PuzzleScreenState extends ConsumerState<PuzzleScreen> with TickerProvider
                   // Close button
                   ElevatedButton.icon(
                     onPressed: _toggleHint,
-                    icon: const Icon(Icons.close),
+                    icon: Icon(Icons.close, color: Theme.of(context).colorScheme.onSecondary),
                     label: const Text('Close Hint'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Theme.of(context).colorScheme.secondary,

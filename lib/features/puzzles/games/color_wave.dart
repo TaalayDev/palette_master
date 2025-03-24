@@ -103,7 +103,9 @@ class _ColorWaveGameState extends ConsumerState<ColorWaveGame> with TickerProvid
     _targetGradientEnd = colors[targetIndex2];
 
     // Initialize with 2 waves to start
-    _initializeWaves(2);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initializeWaves(2);
+    });
 
     // Initially set user gradient same as target (will be replaced when waves are adjusted)
     _userGradientStart = Colors.white;
@@ -115,38 +117,39 @@ class _ColorWaveGameState extends ConsumerState<ColorWaveGame> with TickerProvid
     final colors = widget.puzzle.availableColors;
 
     // Clear existing waves
-    _colorWaves = [];
-    _selectedColors = [];
+    setState(() {
+      _colorWaves = [];
+      _selectedColors = [];
+    });
 
-    // Create new waves
+    // Create new waves with more reliable initialization
     for (int i = 0; i < count; i++) {
       final colorIndex = random.nextInt(colors.length);
       final color = colors[colorIndex];
 
-      // Add variation to wave parameters based on level
-      final baseAmplitude = _amplitude;
-      final baseFrequency = _frequency;
-      final baseSpeed = _speed;
-
-      final randomAmplitude = baseAmplitude * (0.7 + random.nextDouble() * 0.6);
-      final randomFrequency = baseFrequency * (0.7 + random.nextDouble() * 0.6);
-      final randomSpeed = baseSpeed * (0.7 + random.nextDouble() * 0.6);
-      final randomPhase = random.nextDouble() * 2 * pi;
+      // Use more stable default values
+      final baseAmplitude = 15.0;
+      final baseFrequency = 1.0;
+      final baseSpeed = 0.5;
 
       final wave = ColorWave(
         color: color,
-        amplitude: randomAmplitude,
-        frequency: randomFrequency,
-        speed: randomSpeed,
-        phase: randomPhase,
+        amplitude: baseAmplitude,
+        frequency: baseFrequency,
+        speed: baseSpeed,
+        phase: random.nextDouble() * 2 * pi,
       );
 
-      _colorWaves.add(wave);
-      _selectedColors.add(color);
+      setState(() {
+        _colorWaves.add(wave);
+        _selectedColors.add(color);
+      });
     }
 
     _currentWaveCount = count;
-    _selectWave(null);
+
+    // Make sure to update the mixed color after initialization
+    _updateMixedColor();
   }
 
   @override
@@ -162,26 +165,25 @@ class _ColorWaveGameState extends ConsumerState<ColorWaveGame> with TickerProvid
       setState(() {
         _resultColor = Colors.white;
         _similarity = 0.0;
+        _userGradientStart = Colors.white;
+        _userGradientEnd = Colors.white;
       });
       widget.onColorMixed(Colors.white);
       return;
     }
 
     // Calculate mixed color from waves
-    // This is a simplified version - in a real implementation,
-    // we would calculate the actual color blend at each point
     final colors = _colorWaves.map((wave) => wave.color).toList();
     final mixedColor = ColorMixer.mixSubtractive(colors);
 
-    // Update gradient start/end colors based on wave positions
-    // This simulates how the waves would blend at different points
-    final firstPeakColor = _colorWaves.isNotEmpty ? _colorWaves.first.color : Colors.white;
-    final lastPeakColor = _colorWaves.length > 1 ? _colorWaves.last.color : firstPeakColor;
+    // Update gradient colors
+    final firstColor = _colorWaves.isNotEmpty ? _colorWaves.first.color : Colors.white;
+    final lastColor = _colorWaves.length > 1 ? _colorWaves.last.color : firstColor;
 
     setState(() {
       _resultColor = mixedColor;
-      _userGradientStart = firstPeakColor;
-      _userGradientEnd = lastPeakColor;
+      _userGradientStart = firstColor;
+      _userGradientEnd = lastColor;
     });
 
     widget.onColorMixed(mixedColor);
@@ -618,18 +620,45 @@ class _ColorWaveGameState extends ConsumerState<ColorWaveGame> with TickerProvid
             ),
           ),
 
-          // Interactive wave handlers
-          ..._colorWaves.map((wave) => Positioned.fill(
-                child: GestureDetector(
-                  onPanStart: (details) => _handlePanStart(details, wave),
-                  onPanUpdate: (details) => _handlePanUpdate(details, wave),
-                  onPanEnd: _handlePanEnd,
-                  onTap: () => _selectWave(wave),
-                  child: Container(
-                    color: Colors.transparent,
-                  ),
-                ),
-              )),
+          // Single gesture detector for the entire canvas
+          Positioned.fill(
+            child: GestureDetector(
+              onPanStart: (details) {
+                // Find the closest wave to the touch point
+                ColorWave? closestWave;
+                double minDistance = double.infinity;
+
+                for (var wave in _colorWaves) {
+                  // Use a simple distance calculation
+                  final distance = (details.localPosition.dy - MediaQuery.of(context).size.height / 2).abs();
+                  if (distance < minDistance) {
+                    minDistance = distance;
+                    closestWave = wave;
+                  }
+                }
+
+                if (closestWave != null) {
+                  _handlePanStart(details, closestWave);
+                }
+              },
+              onPanUpdate: (details) {
+                if (_selectedWave != null) {
+                  _handlePanUpdate(details, _selectedWave!);
+                }
+              },
+              onPanEnd: _handlePanEnd,
+              onTap: () {
+                // Deselect wave on tap (if no wave was found)
+                setState(() {
+                  _selectedWave = null;
+                });
+              },
+              // Using transparent color to ensure gestures are detected
+              child: Container(
+                color: Colors.transparent,
+              ),
+            ),
+          ),
 
           // Tutorial overlay if needed
           if (_showTutorial) _buildTutorialOverlay(),
@@ -645,7 +674,7 @@ class _ColorWaveGameState extends ConsumerState<ColorWaveGame> with TickerProvid
     switch (_tutorialStep) {
       case 0:
         message = 'Tap and drag a wave to start';
-        alignment = Alignment.center;
+        alignment = Alignment.topCenter;
         break;
       case 1:
         message = 'Drag up/down to change amplitude';
@@ -664,42 +693,49 @@ class _ColorWaveGameState extends ConsumerState<ColorWaveGame> with TickerProvid
         alignment = Alignment.center;
     }
 
-    return Positioned.fill(
-      child: Container(
-        color: Colors.black.withOpacity(0.3),
-        alignment: alignment,
-        padding: const EdgeInsets.all(16),
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _showTutorial = false;
+        });
+      },
+      child: Positioned.fill(
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface,
-            borderRadius: BorderRadius.circular(8),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.2),
-                blurRadius: 5,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.lightbulb_outline,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  message,
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Theme.of(context).colorScheme.onSurface,
+          color: Colors.black.withOpacity(0.3),
+          alignment: alignment,
+          padding: const EdgeInsets.all(16),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surface,
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.2),
+                  blurRadius: 5,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.lightbulb_outline,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    message,
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).colorScheme.onSurface,
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

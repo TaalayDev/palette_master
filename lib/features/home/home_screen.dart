@@ -53,22 +53,10 @@ class HomeScreen extends ConsumerWidget {
                           color: isDarkMode ? Colors.white : const Color(0xFF4F378B),
                         ),
                       ),
-                      const SizedBox(height: 16),
-                      Container(
-                        constraints: const BoxConstraints(maxWidth: 280),
-                        child: Text(
-                          'Learn color theory through fun, interactive puzzles',
-                          style: TextStyle(
-                            fontSize: 16,
-                            color: isDarkMode ? Colors.white70 : const Color(0xFF4F378B).withOpacity(0.7),
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 48),
+                const SizedBox(height: 32),
 
                 // Main menu options
                 _buildMenuButton(

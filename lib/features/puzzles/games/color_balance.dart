@@ -898,43 +898,6 @@ class ColorBalanceChartPainter extends CustomPainter {
       gaugeHeight,
     );
 
-    // Background
-    final bgPaint = Paint()
-      ..color = Colors.grey.withOpacity(0.3)
-      ..style = PaintingStyle.fill;
-
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(gaugeRect, const Radius.circular(4)),
-      bgPaint,
-    );
-
-    // Filled portion
-    final filledWidth = gaugeWidth * similarity * animation;
-    final filledRect = Rect.fromLTWH(
-      gaugeRect.left,
-      gaugeRect.top,
-      filledWidth,
-      gaugeHeight,
-    );
-
-    Color gaugeColor;
-    if (similarity >= 0.9) {
-      gaugeColor = Colors.green;
-    } else if (similarity >= 0.7) {
-      gaugeColor = Colors.orange;
-    } else {
-      gaugeColor = Colors.red;
-    }
-
-    final filledPaint = Paint()
-      ..color = gaugeColor
-      ..style = PaintingStyle.fill;
-
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(filledRect, const Radius.circular(4)),
-      filledPaint,
-    );
-
     // Draw chart center
     final centerPaint = Paint()
       ..color = Colors.white
@@ -949,6 +912,43 @@ class ColorBalanceChartPainter extends CustomPainter {
       ..strokeWidth = 1;
 
     canvas.drawCircle(center, 8 * animation, shadowPaint);
+
+    // Background
+    // final bgPaint = Paint()
+    //   ..color = Colors.grey.withOpacity(0.3)
+    //   ..style = PaintingStyle.fill;
+
+    // canvas.drawRRect(
+    //   RRect.fromRectAndRadius(gaugeRect, const Radius.circular(4)),
+    //   bgPaint,
+    // );
+
+    // // Filled portion
+    // final filledWidth = gaugeWidth * similarity * animation;
+    // final filledRect = Rect.fromLTWH(
+    //   gaugeRect.left,
+    //   gaugeRect.top,
+    //   filledWidth,
+    //   gaugeHeight,
+    // );
+
+    // Color gaugeColor;
+    // if (similarity >= 0.9) {
+    //   gaugeColor = Colors.green;
+    // } else if (similarity >= 0.7) {
+    //   gaugeColor = Colors.orange;
+    // } else {
+    //   gaugeColor = Colors.red;
+    // }
+
+    // final filledPaint = Paint()
+    //   ..color = gaugeColor
+    //   ..style = PaintingStyle.fill;
+
+    // canvas.drawRRect(
+    //   RRect.fromRectAndRadius(filledRect, const Radius.circular(4)),
+    //   filledPaint,
+    // );
   }
 
   @override

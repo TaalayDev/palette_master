@@ -18,6 +18,7 @@ class AppRoutes {
 
   static const settings = AppRoute(name: 'settings', path: '/settings');
 
+  static const classicMixing = AppRoute(name: 'colorMixing', path: '/games/color-mixing');
   static const colorBubble = AppRoute(name: 'colorBubble', path: '/games/color-bubble');
   static const colorBalance = AppRoute(name: 'colorBalance', path: '/games/color-balance');
   static const colorWave = AppRoute(name: 'colorWave', path: '/games/color-wave');
