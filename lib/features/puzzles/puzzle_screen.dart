@@ -583,11 +583,7 @@ class _PuzzleScreenState extends ConsumerState<PuzzleScreen> with TickerProvider
         );
       case GameType.classicMixing:
       default:
-        return ClassicMixingGame(
-          puzzle: puzzle,
-          userColor: userColor,
-          onColorMixed: onColorMixed,
-        );
+        return SizedBox();
     }
   }
 
