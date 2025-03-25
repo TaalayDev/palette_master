@@ -61,18 +61,6 @@ class HomeScreen extends ConsumerWidget {
                 // Main menu options
                 _buildMenuButton(
                   context,
-                  icon: Icons.play_arrow_rounded,
-                  label: 'Start Playing',
-                  description: 'Jump right into color matching challenges',
-                  onTap: () {
-                    context.pushNamed(AppRoutes.puzzles.name, queryParameters: {'id': 'color_matching', 'level': '1'});
-                  },
-                  accentColor: const Color(0xFF6750A4),
-                  isDarkMode: isDarkMode,
-                ),
-                const SizedBox(height: 16),
-                _buildMenuButton(
-                  context,
                   icon: Icons.sports_esports_rounded,
                   label: 'Game Selection',
                   description: 'Explore our collection of interactive color games',

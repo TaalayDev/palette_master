@@ -10,8 +10,6 @@ class AppRoutes {
 
   static const gameSelection = AppRoute(name: 'gameSelection', path: '/game-selection');
 
-  static const puzzles = AppRoute(name: 'puzzles', path: '/puzzles');
-
   static const tutorial = AppRoute(name: 'tutorial', path: '/tutorial');
 
   static const achievements = AppRoute(name: 'achievements', path: '/achievements');
@@ -28,7 +26,6 @@ class AppRoutes {
   static const all = [
     home,
     gameSelection,
-    puzzles,
     tutorial,
     achievements,
     settings,

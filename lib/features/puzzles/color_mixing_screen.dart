@@ -68,8 +68,6 @@ class _ClassicMixingScreenState extends ConsumerState<ClassicMixingScreen> with 
   }
 
   void _checkResult(BuildContext context, Map<String, dynamic> puzzleState) {
-    if (puzzleState == null) return;
-
     final userColor = ref.read(userMixedColorProvider);
 
     setState(() {
@@ -199,14 +197,6 @@ class _ClassicMixingScreenState extends ConsumerState<ClassicMixingScreen> with 
     );
   }
 
-  void _resetLevel() {
-    setState(() {
-      _attempts = 0;
-      _showHint = false;
-    });
-    ref.read(userMixedColorProvider.notifier).reset();
-  }
-
   void _toggleHint() {
     setState(() {
       _showHint = !_showHint;
@@ -321,6 +311,15 @@ class _ClassicMixingScreenState extends ConsumerState<ClassicMixingScreen> with 
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
+        leading: IconButton(
+          icon: Icon(
+            Icons.arrow_back_ios,
+            color: Colors.purple.shade200,
+          ),
+          onPressed: () {
+            context.go(AppRoutes.gameSelection.path);
+          },
+        ),
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -340,11 +339,6 @@ class _ClassicMixingScreenState extends ConsumerState<ClassicMixingScreen> with 
             icon: Icon(Icons.info_outline, color: Colors.purple.shade200),
             onPressed: _toggleHint,
             tooltip: 'Show Hint',
-          ),
-          IconButton(
-            icon: Icon(Icons.refresh, color: Colors.purple.shade200),
-            onPressed: _resetLevel,
-            tooltip: 'Reset Level',
           ),
         ],
       ),
@@ -387,71 +381,6 @@ class _ClassicMixingScreenState extends ConsumerState<ClassicMixingScreen> with 
               },
               child: Column(
                 children: [
-                  // Header with level info
-                  Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        // Level badge
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: Colors.purple.shade900.withOpacity(0.7),
-                            borderRadius: BorderRadius.circular(20),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.3),
-                                blurRadius: 8,
-                                offset: const Offset(0, 3),
-                              ),
-                            ],
-                          ),
-                          child: Text(
-                            'Level ${widget.level}',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-
-                        // Score
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: Colors.purple.shade700.withOpacity(0.7),
-                            borderRadius: BorderRadius.circular(20),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.3),
-                                blurRadius: 8,
-                                offset: const Offset(0, 3),
-                              ),
-                            ],
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(
-                                Icons.star,
-                                color: Colors.amber,
-                                size: 18,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                'Score: $_score',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
                   // Level description
                   if (_showTips)
                     Padding(
