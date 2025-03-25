@@ -1,1513 +1,1045 @@
-import 'dart:async';
 import 'dart:math';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:palette_master/core/color_models/color_mixer.dart';
 import 'package:palette_master/features/puzzles/models/puzzle.dart';
-import 'package:palette_master/features/puzzles/widgets/color_preview.dart';
 import 'package:vibration/vibration.dart';
 
-class ColorMemoryGame extends ConsumerStatefulWidget {
+class MemoryGame extends ConsumerStatefulWidget {
   final Puzzle puzzle;
-  final Color userColor;
-  final Function(Color) onColorMixed;
+  final Function(Color) onColorSelected;
+  final Function(int) onScoreUpdate;
+  final Function() onLevelComplete;
 
-  const ColorMemoryGame({
+  const MemoryGame({
     super.key,
     required this.puzzle,
-    required this.userColor,
-    required this.onColorMixed,
+    required this.onColorSelected,
+    required this.onScoreUpdate,
+    required this.onLevelComplete,
   });
 
   @override
-  ConsumerState<ColorMemoryGame> createState() => _ColorMemoryGameState();
+  ConsumerState<MemoryGame> createState() => _MemoryGameState();
 }
 
-class _ColorMemoryGameState extends ConsumerState<ColorMemoryGame> with TickerProviderStateMixin {
-  // Game states
-  late GameMode _gameMode;
-  GameState _gameState = GameState.notStarted;
-  int _currentLevel = 0;
-  int _score = 0;
-  int _consecutiveCorrect = 0;
-  double _similarity = 0.0;
-
-  // Game board
+class _MemoryGameState extends ConsumerState<MemoryGame> with TickerProviderStateMixin {
+  // Game state
   late List<MemoryCard> _cards;
-  List<MemoryCard> _selectedCards = [];
-  List<MemoryCard> _matchedCards = [];
-  List<int> _colorSequence = [];
-  int _sequenceIndex = 0;
-
-  // Timers
-  Timer? _gameTimer;
-  Timer? _sequenceTimer;
-  int _remainingTime = 0;
-  bool _isShowingSequence = false;
+  final List<int> _selectedIndices = [];
+  int _matchedPairs = 0;
+  int _moves = 0;
+  int _score = 0;
+  bool _isLocked = false;
+  bool _showingSequence = false;
+  int _currentLevel = 1;
+  bool _levelCompleted = false;
 
   // Animation controllers
-  late AnimationController _boardAnimationController;
-  late Animation<double> _boardAnimation;
-  late AnimationController _cardFlipController;
-  Animation<double>? _cardFlipAnimation;
-  late AnimationController _feedbackAnimationController;
-  late Animation<double> _feedbackAnimation;
+  late AnimationController _flipController;
+  late AnimationController _shakeController;
+  late AnimationController _scaleController;
+  late AnimationController _rotationController;
+  late AnimationController _sequenceController;
+  late Animation<double> _shakeAnimation;
 
-  // Game metrics
-  int _moves = 0;
-  int _correctMatches = 0;
-  int _mistakes = 0;
-  int _remainingPairs = 0;
-  int _revealedCount = 0;
+  // Game mode
+  late GameMode _gameMode;
 
-  // Current target color in color sequence mode
-  Color _targetColor = Colors.white;
+  // Sequence for memory mode
+  List<int> _sequence = [];
+  int _sequenceStep = 0;
+  bool _isPlayerTurn = false;
+
+  // Timer for sequence display
+  late AnimationController _timerController;
+
+  // Physical properties for cards
+  final double _cardDepth = 8.0;
 
   @override
   void initState() {
     super.initState();
 
     // Initialize animation controllers
-    _boardAnimationController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 800),
-    );
-
-    _boardAnimation = CurvedAnimation(
-      parent: _boardAnimationController,
-      curve: Curves.easeOutBack,
-    );
-
-    _cardFlipController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 400),
-    );
-
-    _feedbackAnimationController = AnimationController(
+    _flipController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 500),
     );
 
-    _feedbackAnimation = CurvedAnimation(
-      parent: _feedbackAnimationController,
-      curve: Curves.elasticOut,
+    _shakeController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
     );
+
+    _shakeAnimation = Tween<double>(
+      begin: -10.0,
+      end: 10.0,
+    ).animate(
+      CurvedAnimation(
+        parent: _shakeController,
+        curve: Curves.elasticIn,
+      ),
+    );
+
+    _scaleController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    );
+
+    _rotationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    );
+
+    _sequenceController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+
+    _timerController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 5),
+    )..addListener(() {
+        if (_timerController.isCompleted && _isPlayerTurn) {
+          _handleTimeOut();
+        }
+      });
 
     // Determine game mode based on level
     _determineGameMode();
 
-    // Initialize the game
+    // Initialize game
     _initializeGame();
+  }
 
-    // Start the animation
-    _boardAnimationController.forward();
+  @override
+  void dispose() {
+    _flipController.dispose();
+    _shakeController.dispose();
+    _scaleController.dispose();
+    _rotationController.dispose();
+    _sequenceController.dispose();
+    _timerController.dispose();
+    super.dispose();
   }
 
   void _determineGameMode() {
     final level = widget.puzzle.level;
 
-    if (level <= 3) {
-      _gameMode = GameMode.colorMatching; // Simple matching pairs
-    } else if (level <= 6) {
-      _gameMode = GameMode.colorSequence; // Remember color sequence
-    } else if (level <= 9) {
-      _gameMode = GameMode.colorRelationships; // Match color relationships
+    if (level <= 5) {
+      _gameMode = GameMode.classicMatch;
+    } else if (level <= 10) {
+      _gameMode = GameMode.complementaryMatch;
+    } else if (level <= 15) {
+      _gameMode = GameMode.sequenceMemory;
     } else {
-      _gameMode = GameMode.mixedMode; // Mix of different challenges
+      _gameMode = GameMode.mixingMemory;
     }
+
+    _currentLevel = level;
   }
 
   void _initializeGame() {
-    // Reset game state
-    _gameState = GameState.notStarted;
-    _currentLevel = 1;
-    _score = 0;
-    _consecutiveCorrect = 0;
-    _moves = 0;
-    _correctMatches = 0;
-    _mistakes = 0;
-    _selectedCards = [];
-    _matchedCards = [];
-
-    // Cancel any active timers
-    _gameTimer?.cancel();
-    _sequenceTimer?.cancel();
-
-    // Create the game board based on game mode
-    _createGameBoard();
-
-    // Initial target color (used in some game modes)
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_gameMode == GameMode.colorSequence) {
-        _targetColor = widget.puzzle.targetColor;
-        widget.onColorMixed(_targetColor);
-      } else {
-        _targetColor = Colors.white;
-        widget.onColorMixed(_targetColor);
-      }
-    });
-  }
-
-  void _createGameBoard() {
     final random = Random();
 
-    // Determine grid size based on level
-    int gridSize = 4; // Default 4x4 grid
-    if (widget.puzzle.level > 5) {
-      gridSize = 5; // 5x5 for higher levels
-    }
-    if (widget.puzzle.level > 10) {
-      gridSize = 6; // 6x6 for very high levels
+    switch (_gameMode) {
+      case GameMode.classicMatch:
+        _initializeClassicMatch();
+        break;
+
+      case GameMode.complementaryMatch:
+        _initializeComplementaryMatch();
+        break;
+
+      case GameMode.sequenceMemory:
+        _initializeSequenceMemory();
+        break;
+
+      case GameMode.mixingMemory:
+        _initializeMixingMemory();
+        break;
     }
 
-    // Initialize empty card list
+    // Shuffle cards
+    _cards.shuffle(random);
+
+    // Start with intro animation
+    _scaleController.forward();
+  }
+
+  void _initializeClassicMatch() {
+    // Create pairs of identical colors
+    final gridSize = _getGridSize();
+    final pairCount = (gridSize * gridSize) ~/ 2;
+
+    // Select colors from available palette
+    final selectedColors = _selectColors(pairCount);
+
     _cards = [];
 
-    switch (_gameMode) {
-      case GameMode.colorMatching:
-        _createColorMatchingBoard(gridSize, random);
-        break;
-      case GameMode.colorSequence:
-        _createColorSequenceBoard(gridSize, random);
-        break;
-      case GameMode.colorRelationships:
-        _createColorRelationshipsBoard(gridSize, random);
-        break;
-      case GameMode.mixedMode:
-        // Randomly choose between the three modes
-        final randomMode = random.nextInt(3);
-        switch (randomMode) {
-          case 0:
-            _createColorMatchingBoard(gridSize, random);
-            break;
-          case 1:
-            _createColorSequenceBoard(gridSize, random);
-            break;
-          case 2:
-            _createColorRelationshipsBoard(gridSize, random);
-            break;
-        }
-        break;
-    }
-
-    // Shuffle the cards
-    _shuffleCards();
-  }
-
-  void _createColorMatchingBoard(int gridSize, Random random) {
-    // Simple memory game with matching pairs
-    // Create pairs of cards with the same colors
-
-    // Calculate how many pairs we need
-    int numberOfPairs = (gridSize * gridSize) ~/ 2;
-    _remainingPairs = numberOfPairs;
-
-    // Get available colors from puzzle
-    final availableColors = List<Color>.from(widget.puzzle.availableColors);
-
-    // If we don't have enough colors, generate more by mixing
-    while (availableColors.length < numberOfPairs) {
-      // Mix two random colors
-      final color1 = availableColors[random.nextInt(availableColors.length)];
-      final color2 = availableColors[random.nextInt(availableColors.length)];
-      final mixedColor = ColorMixer.mixSubtractive([color1, color2]);
-
-      // Check if this color is sufficiently different from existing colors
-      bool isDifferentEnough = true;
-      for (final existingColor in availableColors) {
-        if (_calculateColorSimilarity(mixedColor, existingColor) > 0.8) {
-          isDifferentEnough = false;
-          break;
-        }
-      }
-
-      if (isDifferentEnough) {
-        availableColors.add(mixedColor);
-      }
-    }
-
-    // Shuffle the available colors and take the number we need
-    availableColors.shuffle();
-    final selectedColors = availableColors.take(numberOfPairs).toList();
-
-    // Create the pairs
-    for (int i = 0; i < numberOfPairs; i++) {
+    // Create pairs of cards
+    for (int i = 0; i < pairCount; i++) {
       final color = selectedColors[i];
 
-      // Create first card of the pair
+      // Add two cards with the same color
       _cards.add(MemoryCard(
         id: i * 2,
-        color: color,
+        frontColor: color,
+        backColor: Colors.indigo,
         isFlipped: false,
         isMatched: false,
-        pairId: i,
-        type: CardType.color,
       ));
 
-      // Create second card of the pair
       _cards.add(MemoryCard(
         id: i * 2 + 1,
-        color: color,
+        frontColor: color,
+        backColor: Colors.indigo,
         isFlipped: false,
         isMatched: false,
-        pairId: i,
-        type: CardType.color,
       ));
     }
   }
 
-  void _createColorSequenceBoard(int gridSize, Random random) {
-    // Create a sequence of colors that the player needs to memorize and repeat
+  void _initializeComplementaryMatch() {
+    // Create pairs of complementary colors
+    final gridSize = _getGridSize();
+    final pairCount = (gridSize * gridSize) ~/ 2;
 
-    // For sequence mode, we'll use a simplified grid
-    gridSize = 3; // 3x3 grid for sequence mode
+    // Select base colors from which we'll create complementary pairs
+    final baseColors = _selectColors(pairCount);
 
-    // Get available colors from puzzle
-    final availableColors = List<Color>.from(widget.puzzle.availableColors);
+    _cards = [];
 
-    // Add variation for more color choices
-    for (int i = 0; i < 3 && availableColors.length < 9; i++) {
-      if (availableColors.length >= 2) {
-        final color1 = availableColors[random.nextInt(availableColors.length)];
-        final color2 = availableColors[random.nextInt(availableColors.length)];
-        final mixedColor = ColorMixer.mixSubtractive([color1, color2]);
-        availableColors.add(mixedColor);
-      }
+    // Create pairs of complementary cards
+    for (int i = 0; i < pairCount; i++) {
+      final baseColor = baseColors[i];
+      final complementaryColor = ColorMixer.getComplementary(baseColor);
+
+      // Add original color
+      _cards.add(MemoryCard(
+        id: i * 2,
+        frontColor: baseColor,
+        backColor: Colors.indigo,
+        isFlipped: false,
+        isMatched: false,
+        matchId: i, // Cards with same matchId form a pair
+      ));
+
+      // Add complementary color
+      _cards.add(MemoryCard(
+        id: i * 2 + 1,
+        frontColor: complementaryColor,
+        backColor: Colors.indigo,
+        isFlipped: false,
+        isMatched: false,
+        matchId: i, // Cards with same matchId form a pair
+      ));
     }
+  }
 
-    // Ensure we have at least gridSize^2 colors
-    while (availableColors.length < gridSize * gridSize) {
-      availableColors.add(Colors.primaries[random.nextInt(Colors.primaries.length)]);
-    }
+  void _initializeSequenceMemory() {
+    // This mode shows a sequence of colors that the player must memorize and reproduce
+    final sequenceLength = _currentLevel - 10 + 3; // Starting with 3 for level 11
+    final sequenceLength2 = sequenceLength.clamp(3, 8); // Max sequence of 8
 
-    // Shuffle and select colors for the grid
-    availableColors.shuffle();
-    final selectedColors = availableColors.take(gridSize * gridSize).toList();
+    // Select colors for the sequence
+    final availableColors = widget.puzzle.availableColors;
+    final random = Random();
 
-    // Create cards for each color
-    for (int i = 0; i < selectedColors.length; i++) {
+    _cards = [];
+    // Create a grid of color cards to choose from
+    for (int i = 0; i < availableColors.length; i++) {
       _cards.add(MemoryCard(
         id: i,
-        color: selectedColors[i],
-        isFlipped: false,
+        frontColor: availableColors[i],
+        backColor: Colors.indigo,
+        isFlipped: true, // Start with colors visible
         isMatched: false,
-        pairId: -1, // Not used in sequence mode
-        type: CardType.color,
       ));
     }
 
-    // Generate a sequence based on level difficulty
-    _colorSequence = [];
-    int sequenceLength = 3 + (widget.puzzle.level ~/ 2).clamp(0, 6);
-
-    for (int i = 0; i < sequenceLength; i++) {
-      _colorSequence.add(random.nextInt(_cards.length));
+    // Generate a random sequence
+    _sequence = [];
+    for (int i = 0; i < sequenceLength2; i++) {
+      _sequence.add(random.nextInt(availableColors.length));
     }
 
-    // Reset sequence index
-    _sequenceIndex = 0;
+    // Start by showing the sequence
+    _showingSequence = true;
+    _sequenceStep = 0;
 
-    // Set target color to first in sequence
-    if (_colorSequence.isNotEmpty) {
-      _targetColor = _cards[_colorSequence[0]].color;
-      widget.onColorMixed(_targetColor);
-    }
+    // Begin sequence display after short delay
+    Future.delayed(const Duration(milliseconds: 800), () {
+      if (mounted) {
+        _showNextInSequence();
+      }
+    });
   }
 
-  void _createColorRelationshipsBoard(int gridSize, Random random) {
-    // Create a board where players need to find color relationships
-    // (complementary, analogous, etc.)
+  void _initializeMixingMemory() {
+    // This mode shows color mixes and the player must identify the component colors
+    final gridSize = _getGridSize();
+    final mixCount = gridSize; // Number of mixes to create
 
-    // Get available colors from puzzle
-    final availableColors = List<Color>.from(widget.puzzle.availableColors);
+    // Select base colors for mixing
+    final baseColors = _selectColors(mixCount * 2); // Need more colors for mixing
 
-    // Ensure we have enough colors
-    while (availableColors.length < 8) {
-      availableColors.add(Colors.primaries[random.nextInt(Colors.primaries.length)]);
-    }
+    _cards = [];
+    final mixes = <Color>[];
 
-    // Shuffle colors
-    availableColors.shuffle();
+    // Create color mixes
+    for (int i = 0; i < mixCount; i++) {
+      final color1 = baseColors[i * 2];
+      final color2 = baseColors[i * 2 + 1];
 
-    // Calculate number of pairs
-    int numberOfPairs = (gridSize * gridSize) ~/ 2;
-    _remainingPairs = numberOfPairs;
+      // Mix the two colors
+      final mixedColor = ColorMixer.mixSubtractive([color1, color2]);
+      mixes.add(mixedColor);
 
-    // Create pairs based on color relationships
-    for (int i = 0; i < numberOfPairs; i++) {
-      // Choose relationship type based on index
-      RelationshipType relationshipType;
-
-      if (i % 3 == 0) {
-        relationshipType = RelationshipType.complementary;
-      } else if (i % 3 == 1) {
-        relationshipType = RelationshipType.analogous;
-      } else {
-        relationshipType = RelationshipType.monochromatic;
-      }
-
-      // Get a base color
-      final baseColor = availableColors[i % availableColors.length];
-
-      // Create related color based on relationship type
-      Color relatedColor;
-      String relationshipName;
-
-      switch (relationshipType) {
-        case RelationshipType.complementary:
-          relatedColor = ColorMixer.getComplementary(baseColor);
-          relationshipName = "Complementary";
-          break;
-        case RelationshipType.analogous:
-          final analogousColors = ColorMixer.getAnalogous(baseColor);
-          relatedColor = analogousColors.length > 1 ? analogousColors[1] : baseColor;
-          relationshipName = "Analogous";
-          break;
-        case RelationshipType.monochromatic:
-          // Create a lighter/darker version of the base color
-          final hsvColor = HSVColor.fromColor(baseColor);
-          final newValue = (hsvColor.value + 0.3).clamp(0.0, 1.0);
-          relatedColor = hsvColor.withValue(newValue).toColor();
-          relationshipName = "Monochromatic";
-          break;
-      }
-
-      // Add the base color card
+      // Add component colors
       _cards.add(MemoryCard(
-        id: i * 2,
-        color: baseColor,
+        id: i * 3,
+        frontColor: color1,
+        backColor: Colors.indigo,
         isFlipped: false,
         isMatched: false,
-        pairId: i,
-        type: CardType.color,
-        relationshipType: relationshipType,
-        relationshipName: relationshipName,
+        matchId: i, // Cards with same matchId form a set
       ));
 
-      // Add the related color card
       _cards.add(MemoryCard(
-        id: i * 2 + 1,
-        color: relatedColor,
+        id: i * 3 + 1,
+        frontColor: color2,
+        backColor: Colors.indigo,
         isFlipped: false,
         isMatched: false,
-        pairId: i,
-        type: CardType.relatedColor,
-        relationshipType: relationshipType,
-        relationshipName: relationshipName,
+        matchId: i, // Cards with same matchId form a set
+      ));
+
+      // Add mixed color card
+      _cards.add(MemoryCard(
+        id: i * 3 + 2,
+        frontColor: mixedColor,
+        backColor: Colors.indigo,
+        isFlipped: true, // Start with mixed colors visible
+        isMatched: false,
+        matchId: i, // Cards with same matchId form a set
+        isMix: true, // This is a mixed color card
       ));
     }
-  }
 
-  void _shuffleCards() {
+    // Remove mixed cards from gameplay cards but show them separately
+    _cards = _cards.where((card) => !card.isMix).toList();
+
     // Shuffle the cards
-    _cards.shuffle();
-
-    // Assign grid positions
-    int gridSize = sqrt(_cards.length).ceil();
-
-    for (int i = 0; i < _cards.length; i++) {
-      int row = i ~/ gridSize;
-      int col = i % gridSize;
-
-      _cards[i].gridX = col;
-      _cards[i].gridY = row;
-    }
+    _cards.shuffle(Random());
   }
 
-  void _startGame() {
-    setState(() {
-      _gameState = GameState.playing;
+  List<Color> _selectColors(int count) {
+    // Select a subset of colors from available colors
+    final availableColors = widget.puzzle.availableColors;
+    final selectedColors = <Color>[];
+    final random = Random();
 
-      // Set timer based on game mode and level
-      switch (_gameMode) {
-        case GameMode.colorMatching:
-          _remainingTime = 60 + (widget.puzzle.level * 5); // More time for higher levels
-          break;
-        case GameMode.colorSequence:
-          // Will be handled separately in _showColorSequence
-          break;
-        case GameMode.colorRelationships:
-          _remainingTime = 90 + (widget.puzzle.level * 5); // More time for relationship mode
-          break;
-        case GameMode.mixedMode:
-          _remainingTime = 120; // Fixed time for mixed mode
-          break;
+    // If we need more colors than available, we'll create variations
+    if (count > availableColors.length) {
+      // Add all available colors
+      selectedColors.addAll(availableColors);
+
+      // Create variations of existing colors to get the required count
+      while (selectedColors.length < count) {
+        final baseColor = availableColors[random.nextInt(availableColors.length)];
+
+        // Create a variation by adjusting brightness or saturation
+        final hsvColor = HSVColor.fromColor(baseColor);
+        final variation = hsvColor
+            .withSaturation((hsvColor.saturation * (0.7 + random.nextDouble() * 0.6)).clamp(0.2, 1.0))
+            .withValue((hsvColor.value * (0.7 + random.nextDouble() * 0.6)).clamp(0.3, 1.0))
+            .toColor();
+
+        selectedColors.add(variation);
       }
-    });
-
-    // Start timer for modes that need it
-    if (_gameMode != GameMode.colorSequence) {
-      _startGameTimer();
     } else {
-      _showColorSequence();
+      // Randomly select count colors from available
+      final tempList = List<Color>.from(availableColors);
+      tempList.shuffle(random);
+      selectedColors.addAll(tempList.take(count));
+    }
+
+    return selectedColors;
+  }
+
+  int _getGridSize() {
+    // Determine grid size based on level
+    final level = widget.puzzle.level;
+
+    if (level <= 3) return 2; // 2x2 grid
+    if (level <= 8) return 3; // 3x3 grid
+    if (level <= 12) return 4; // 4x4 grid
+    return 5; // 5x5 grid for higher levels
+  }
+
+  void _handleCardTap(int index) {
+    if (_isLocked || _cards[index].isFlipped || _cards[index].isMatched || _showingSequence) {
+      return;
+    }
+
+    // Haptic feedback
+    Vibration.hasVibrator().then((hasVibrator) {
+      if (hasVibrator ?? false) {
+        Vibration.vibrate(duration: 20, amplitude: 40);
+      }
+    });
+
+    setState(() {
+      // Flip the card
+      _cards[index].isFlipped = true;
+      _selectedIndices.add(index);
+
+      // Update selected color for parent
+      widget.onColorSelected(_cards[index].frontColor);
+    });
+
+    // Play flip sound
+    // _playSound('card_flip.mp3');
+
+    if (_gameMode == GameMode.sequenceMemory) {
+      _checkSequenceProgress(index);
+      return;
+    }
+
+    if (_gameMode == GameMode.mixingMemory) {
+      if (_selectedIndices.length == 2) {
+        _isLocked = true;
+        Future.delayed(const Duration(milliseconds: 800), () {
+          _checkMixMatch();
+        });
+      }
+      return;
+    }
+
+    // Check for pairs in regular matching modes
+    if (_selectedIndices.length == 2) {
+      _isLocked = true;
+      _moves++;
+
+      Future.delayed(const Duration(milliseconds: 800), () {
+        _checkMatch();
+      });
     }
   }
 
-  void _startGameTimer() {
-    // Cancel any existing timer
-    _gameTimer?.cancel();
+  void _checkMatch() {
+    if (_selectedIndices.length != 2) return;
 
-    // Start a new timer
-    _gameTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      setState(() {
-        if (_remainingTime > 0) {
-          _remainingTime--;
-        } else {
-          // Time's up
-          _endGame(false);
+    final index1 = _selectedIndices[0];
+    final index2 = _selectedIndices[1];
+
+    bool isMatch = false;
+
+    if (_gameMode == GameMode.classicMatch) {
+      // Match identical colors
+      isMatch = _cards[index1].frontColor == _cards[index2].frontColor;
+    } else if (_gameMode == GameMode.complementaryMatch) {
+      // Match cards with the same matchId (complementary pairs)
+      isMatch = _cards[index1].matchId == _cards[index2].matchId;
+    }
+
+    setState(() {
+      if (isMatch) {
+        // Mark cards as matched
+        _cards[index1].isMatched = true;
+        _cards[index2].isMatched = true;
+        _matchedPairs++;
+
+        // Update score
+        _score += 100 * _currentLevel;
+        widget.onScoreUpdate(_score);
+
+        // Play match sound
+        // _playSound('match.mp3');
+
+        // Provide haptic feedback
+        Vibration.hasVibrator().then((hasVibrator) {
+          if (hasVibrator ?? false) {
+            Vibration.vibrate(duration: 100, amplitude: 128);
+          }
+        });
+
+        // Check for level completion
+        if (_matchedPairs == _cards.length ~/ 2) {
+          _levelCompleted = true;
+          // Schedule level completion after showing the match
+          Future.delayed(const Duration(milliseconds: 500), () {
+            _handleLevelComplete();
+          });
         }
-      });
+      } else {
+        // Flip cards back
+        _cards[index1].isFlipped = false;
+        _cards[index2].isFlipped = false;
+
+        // Play mismatch sound
+        // _playSound('mismatch.mp3');
+
+        // Shake animation
+        _shakeController.reset();
+        _shakeController.forward();
+
+        // Penalty for wrong match
+        _score = max(0, _score - 10);
+        widget.onScoreUpdate(_score);
+      }
+
+      _selectedIndices.clear();
+      _isLocked = false;
     });
   }
 
-  void _showColorSequence() {
-    setState(() {
-      _isShowingSequence = true;
-      // Reset all cards
-      for (final card in _cards) {
-        card.isFlipped = false;
-      }
-      _sequenceIndex = 0;
-    });
+  void _checkSequenceProgress(int tappedIndex) {
+    if (!_isPlayerTurn) return;
 
-    // Show the sequence one by one
-    _showNextInSequence();
+    final correctIndex = _sequence[_sequenceStep];
+    final isCorrect = _cards[tappedIndex].id == correctIndex;
+
+    setState(() {
+      if (isCorrect) {
+        // Progress to next step in sequence
+        _sequenceStep++;
+
+        // Check if sequence is complete
+        if (_sequenceStep >= _sequence.length) {
+          // Sequence complete!
+          _score += 150 * _currentLevel;
+          widget.onScoreUpdate(_score);
+
+          // Provide success feedback
+          Vibration.hasVibrator().then((hasVibrator) {
+            if (hasVibrator ?? false) {
+              Vibration.vibrate(duration: 200, amplitude: 200);
+            }
+          });
+
+          // Level complete
+          _levelCompleted = true;
+          Future.delayed(const Duration(milliseconds: 800), () {
+            _handleLevelComplete();
+          });
+        }
+      } else {
+        // Wrong sequence step
+        _shakeController.reset();
+        _shakeController.forward();
+
+        // Penalty
+        _score = max(0, _score - 30);
+        widget.onScoreUpdate(_score);
+
+        // Reset sequence
+        _isPlayerTurn = false;
+        _sequenceStep = 0;
+
+        // Show sequence again after delay
+        Future.delayed(const Duration(milliseconds: 1200), () {
+          if (mounted) {
+            _showNextInSequence();
+          }
+        });
+      }
+    });
   }
 
   void _showNextInSequence() {
-    if (_sequenceIndex < _colorSequence.length) {
-      // Get the card to show
-      final cardIndex = _colorSequence[_sequenceIndex];
-
-      // Flip the card
+    if (_sequenceStep >= _sequence.length) {
+      // End of sequence, player's turn
       setState(() {
-        _cards[cardIndex].isFlipped = true;
-        _targetColor = _cards[cardIndex].color;
+        _showingSequence = false;
+        _isPlayerTurn = true;
+        _sequenceStep = 0;
       });
 
-      // Update mixed color for the puzzle
-      widget.onColorMixed(_targetColor);
-
-      // Provide haptic feedback
-      Vibration.hasVibrator().then((hasVibrator) {
-        if (hasVibrator ?? false) {
-          Vibration.vibrate(duration: 20, amplitude: 40);
-        }
-      });
-
-      // Schedule hiding the card
-      _sequenceTimer = Timer(const Duration(milliseconds: 1000), () {
-        setState(() {
-          _cards[cardIndex].isFlipped = false;
-        });
-
-        // Schedule showing the next card
-        _sequenceTimer = Timer(const Duration(milliseconds: 500), () {
-          _sequenceIndex++;
-          _showNextInSequence();
-        });
-      });
-    } else {
-      // Sequence complete, start the player's turn
-      setState(() {
-        _isShowingSequence = false;
-        _sequenceIndex = 0;
-        _gameState = GameState.playing;
-        _remainingTime = 60 + (_colorSequence.length * 5); // Time based on sequence length
-      });
-
-      // Set the target to the first color in sequence
-      if (_colorSequence.isNotEmpty) {
-        setState(() {
-          _targetColor = _cards[_colorSequence[0]].color;
-        });
-        widget.onColorMixed(_targetColor);
+      // Reset all card highlights
+      for (final card in _cards) {
+        card.isHighlighted = false;
       }
 
-      // Start the game timer
-      _startGameTimer();
-    }
-  }
-
-  void _onCardTap(MemoryCard card) {
-    // Ignore taps when game is not in playing state or card is already flipped/matched
-    if (_gameState != GameState.playing || card.isFlipped || card.isMatched || _isShowingSequence) {
+      // Start timer for player's turn
+      _timerController.reset();
+      _timerController.forward();
       return;
     }
 
-    // Handle card tap based on game mode
-    switch (_gameMode) {
-      case GameMode.colorMatching:
-        _handleColorMatchingTap(card);
-        break;
-      case GameMode.colorSequence:
-        _handleColorSequenceTap(card);
-        break;
-      case GameMode.colorRelationships:
-        _handleColorRelationshipsTap(card);
-        break;
-      case GameMode.mixedMode:
-        // Determine which handler to use based on the current board
-        if (_colorSequence.isNotEmpty) {
-          _handleColorSequenceTap(card);
-        } else if (_cards.any((c) => c.relationshipType != null)) {
-          _handleColorRelationshipsTap(card);
-        } else {
-          _handleColorMatchingTap(card);
-        }
-        break;
+    // Reset all card highlights
+    for (final card in _cards) {
+      card.isHighlighted = false;
     }
-  }
 
-  void _handleColorMatchingTap(MemoryCard card) {
-    // Flip the card
+    // Highlight the current card in sequence
     setState(() {
-      card.isFlipped = true;
-      _selectedCards.add(card);
+      _showingSequence = true;
+      final cardIndex = _sequence[_sequenceStep];
+      _cards[cardIndex].isHighlighted = true;
     });
 
-    // Animate card flip
-    _playCardFlipAnimation();
+    // Play sequence sound
+    // _playSound('sequence_tone.mp3');
 
-    // Provide haptic feedback
-    Vibration.hasVibrator().then((hasVibrator) {
-      if (hasVibrator ?? false) {
-        Vibration.vibrate(duration: 20, amplitude: 40);
-      }
-    });
-
-    // If two cards are selected, check for a match
-    if (_selectedCards.length == 2) {
-      _moves++;
-
-      // Check if cards match
-      if (_selectedCards[0].pairId == _selectedCards[1].pairId) {
-        // Match found
-        _handleMatch();
-      } else {
-        // No match, flip back after delay
-        _handleMismatch();
-      }
-    }
-  }
-
-  void _handleColorSequenceTap(MemoryCard card) {
-    // Check if the tapped card matches the expected card in sequence
-    if (_colorSequence.isEmpty || _sequenceIndex >= _colorSequence.length) {
-      return;
-    }
-
-    // Get the expected card
-    final expectedCardIndex = _colorSequence[_sequenceIndex];
-    final expectedCard = _cards[expectedCardIndex];
-
-    // Flip the card
-    setState(() {
-      card.isFlipped = true;
-    });
-
-    // Animate card flip
-    _playCardFlipAnimation();
-
-    // Check if it's the correct card
-    if (card.id == expectedCard.id) {
-      // Correct card in sequence
-      _handleSequenceMatch(card);
-    } else {
-      // Wrong card selected
-      _handleSequenceMismatch(card);
-    }
-  }
-
-  void _handleColorRelationshipsTap(MemoryCard card) {
-    // Similar to color matching but checking for relationship matches
-    setState(() {
-      card.isFlipped = true;
-      _selectedCards.add(card);
-    });
-
-    // Animate card flip
-    _playCardFlipAnimation();
-
-    // Provide haptic feedback
-    Vibration.hasVibrator().then((hasVibrator) {
-      if (hasVibrator ?? false) {
-        Vibration.vibrate(duration: 20, amplitude: 40);
-      }
-    });
-
-    // If two cards are selected, check for a relationship match
-    if (_selectedCards.length == 2) {
-      _moves++;
-
-      // Check if cards have the same relationship ID
-      if (_selectedCards[0].pairId == _selectedCards[1].pairId) {
-        // Match found
-        _handleMatch();
-
-        // Show relationship info briefly
-        _showRelationshipInfo(_selectedCards[0].relationshipName ?? "Related Colors");
-      } else {
-        // No match, flip back after delay
-        _handleMismatch();
-      }
-    }
-  }
-
-  void _showRelationshipInfo(String relationshipName) {
-    ScaffoldMessenger.of(context).clearSnackBars();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$relationshipName Colors Match!'),
-        duration: const Duration(seconds: 1),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-  }
-
-  void _handleMatch() {
-    // Mark the matched cards
-    setState(() {
-      for (final card in _selectedCards) {
-        card.isMatched = true;
-      }
-      _matchedCards.addAll(_selectedCards);
-      _selectedCards = [];
-      _correctMatches++;
-      _consecutiveCorrect++;
-      _remainingPairs--;
-    });
-
-    // Update score
-    _updateScore(true);
-
-    // Play success animation
-    _feedbackAnimationController.reset();
-    _feedbackAnimationController.forward();
-
-    // Provide haptic feedback
-    Vibration.hasVibrator().then((hasVibrator) {
-      if (hasVibrator ?? false) {
-        Vibration.vibrate(duration: 50, amplitude: 100);
-      }
-    });
-
-    // Check if the game is complete
-    if (_remainingPairs <= 0) {
-      _endGame(true);
-    }
-  }
-
-  void _handleMismatch() {
-    // Flip the cards back after a delay
-    Future.delayed(const Duration(milliseconds: 1000), () {
+    // Move to next step after delay
+    Future.delayed(const Duration(milliseconds: 800), () {
       if (mounted) {
         setState(() {
-          for (final card in _selectedCards) {
-            card.isFlipped = false;
+          _sequenceStep++;
+        });
+        _showNextInSequence();
+      }
+    });
+  }
+
+  void _handleTimeOut() {
+    if (!mounted) return;
+
+    // Time ran out for player's sequence reproduction
+    setState(() {
+      _isPlayerTurn = false;
+      _sequenceStep = 0;
+
+      // Penalty
+      _score = max(0, _score - 50);
+      widget.onScoreUpdate(_score);
+    });
+
+    // Play timeout sound
+    // _playSound('timeout.mp3');
+
+    // Shake as feedback
+    _shakeController.reset();
+    _shakeController.forward();
+
+    // Show sequence again after delay
+    Future.delayed(const Duration(milliseconds: 1200), () {
+      if (mounted) {
+        _showNextInSequence();
+      }
+    });
+  }
+
+  void _checkMixMatch() {
+    if (_selectedIndices.length != 2) return;
+
+    final index1 = _selectedIndices[0];
+    final index2 = _selectedIndices[1];
+
+    // Check if these are components of the same mix
+    final isMatch = _cards[index1].matchId == _cards[index2].matchId;
+
+    setState(() {
+      if (isMatch) {
+        // Mark cards as matched
+        _cards[index1].isMatched = true;
+        _cards[index2].isMatched = true;
+        _matchedPairs++;
+
+        // Update score
+        _score += 120 * _currentLevel;
+        widget.onScoreUpdate(_score);
+
+        // Provide haptic feedback
+        Vibration.hasVibrator().then((hasVibrator) {
+          if (hasVibrator ?? false) {
+            Vibration.vibrate(duration: 100, amplitude: 128);
           }
-          _selectedCards = [];
-          _mistakes++;
-          _consecutiveCorrect = 0;
         });
+
+        // Check for level completion
+        if (_matchedPairs == _cards.length ~/ 2) {
+          _levelCompleted = true;
+          // Schedule level completion after showing the match
+          Future.delayed(const Duration(milliseconds: 500), () {
+            _handleLevelComplete();
+          });
+        }
+      } else {
+        // Flip cards back
+        _cards[index1].isFlipped = false;
+        _cards[index2].isFlipped = false;
+
+        // Shake animation
+        _shakeController.reset();
+        _shakeController.forward();
+
+        // Penalty for wrong match
+        _score = max(0, _score - 15);
+        widget.onScoreUpdate(_score);
       }
-    });
 
-    // Update score
-    _updateScore(false);
+      _selectedIndices.clear();
+      _isLocked = false;
+    });
   }
 
-  void _handleSequenceMatch(MemoryCard card) {
+  void _handleLevelComplete() {
+    // Animate card celebration
+    _rotationController.reset();
+    _rotationController.forward();
+
+    // Notify parent
+    widget.onLevelComplete();
+  }
+
+  void _resetGame() {
     setState(() {
-      card.isMatched = true;
-      _revealedCount++;
-      _sequenceIndex++;
-      _consecutiveCorrect++;
-    });
-
-    // Play success animation
-    _feedbackAnimationController.reset();
-    _feedbackAnimationController.forward();
-
-    // Provide haptic feedback
-    Vibration.hasVibrator().then((hasVibrator) {
-      if (hasVibrator ?? false) {
-        Vibration.vibrate(duration: 50, amplitude: 100);
-      }
-    });
-
-    // Update score
-    _updateScore(true);
-
-    // Update the target color to the next in sequence if there is one
-    if (_sequenceIndex < _colorSequence.length) {
-      final nextCardIndex = _colorSequence[_sequenceIndex];
-      setState(() {
-        _targetColor = _cards[nextCardIndex].color;
-      });
-      widget.onColorMixed(_targetColor);
-    }
-
-    // Check if the sequence is complete
-    if (_sequenceIndex >= _colorSequence.length) {
-      _endGame(true);
-    }
-  }
-
-  void _handleSequenceMismatch(MemoryCard card) {
-    // Flip the card back after a delay
-    Future.delayed(const Duration(milliseconds: 1000), () {
-      if (mounted) {
-        setState(() {
-          card.isFlipped = false;
-          _mistakes++;
-          _consecutiveCorrect = 0;
-        });
-      }
-    });
-
-    // Update score
-    _updateScore(false);
-
-    // Penalize with time reduction
-    setState(() {
-      _remainingTime = (_remainingTime - 5).clamp(0, 1000);
-    });
-  }
-
-  void _updateScore(bool isCorrect) {
-    if (isCorrect) {
-      // Calculate points based on speed, consecutive correct answers, and level
-      int basePoints = 10;
-      int timeBonus = (_remainingTime ~/ 10).clamp(1, 10);
-      int streakBonus = _consecutiveCorrect.clamp(1, 5);
-      int levelBonus = widget.puzzle.level;
-
-      int totalPoints = basePoints * timeBonus * streakBonus + levelBonus;
-
-      setState(() {
-        _score += totalPoints;
-      });
-    } else {
-      // Penalty for mistakes
-      setState(() {
-        _score = (_score - 5).clamp(0, 1000000);
-      });
-    }
-  }
-
-  void _playCardFlipAnimation() {
-    _cardFlipController.reset();
-
-    // Create the animation
-    _cardFlipAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _cardFlipController,
-        curve: Curves.easeInOut,
-      ),
-    );
-
-    // Start the animation
-    _cardFlipController.forward();
-  }
-
-  void _endGame(bool isSuccess) {
-    // Stop the timers
-    _gameTimer?.cancel();
-    _sequenceTimer?.cancel();
-
-    setState(() {
-      _gameState = isSuccess ? GameState.success : GameState.failed;
-    });
-
-    // Calculate similarity based on game performance
-    double similarityFactor;
-
-    if (isSuccess) {
-      // High similarity for success
-      similarityFactor = 0.8 + (0.2 * (1 - (_mistakes / ((_correctMatches + _mistakes) * 2))));
-    } else {
-      // Lower similarity for failure, but still proportional to progress
-      similarityFactor = 0.3 + (0.5 * (1 - (_remainingPairs / (_remainingPairs + _correctMatches))));
-    }
-
-    // Clamp similarity between 0.3 and 1.0
-    similarityFactor = similarityFactor.clamp(0.3, 1.0);
-
-    // Create a color that's a blend between white and the target color
-    final resultColor = Color.lerp(Colors.white, widget.puzzle.targetColor, similarityFactor) ?? Colors.white;
-
-    // Update similarity
-    setState(() {
-      _similarity = similarityFactor;
-    });
-
-    // Update mixed color for puzzle completion
-    widget.onColorMixed(resultColor);
-
-    // Show the game result dialog
-    Future.delayed(const Duration(milliseconds: 500), () {
-      _showGameResultDialog(isSuccess);
-    });
-  }
-
-  void _showGameResultDialog(bool isSuccess) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: Text(isSuccess ? 'Level Complete!' : 'Time\'s Up!'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Score: $_score'),
-            const SizedBox(height: 8),
-            Text('Matches: $_correctMatches'),
-            const SizedBox(height: 8),
-            Text('Mistakes: $_mistakes'),
-            const SizedBox(height: 16),
-            Text(
-              'Color Memory Rating: ${(_similarity * 100).round()}%',
-              style: TextStyle(
-                color: _getSimilarityColor(),
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'You\'ve enhanced your color recognition and memory skills!',
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              _restartGame();
-            },
-            child: const Text('Play Again'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-            },
-            child: const Text('Continue'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _restartGame() {
-    // Reset the game
-    setState(() {
-      _currentLevel++;
-      _selectedCards = [];
-      _matchedCards = [];
-      _colorSequence = [];
-      _sequenceIndex = 0;
+      _selectedIndices.clear();
+      _matchedPairs = 0;
       _moves = 0;
-      _correctMatches = 0;
-      _mistakes = 0;
-      _revealedCount = 0;
-      _gameState = GameState.notStarted;
+      _isLocked = false;
+      _levelCompleted = false;
+
+      // Reset all cards
+      for (final card in _cards) {
+        card.isFlipped = false;
+        card.isMatched = false;
+        card.isHighlighted = false;
+      }
     });
 
-    // Create a new game board
-    _createGameBoard();
+    // Shuffle cards
+    setState(() {
+      _cards.shuffle(Random());
+    });
 
-    // Start the game again
-    _startGame();
-  }
-
-  double _calculateColorSimilarity(Color a, Color b) {
-    // Calculate color similarity (normalized between 0 and 1)
-    final dr = (a.red - b.red) / 255.0;
-    final dg = (a.green - b.green) / 255.0;
-    final db = (a.blue - b.blue) / 255.0;
-
-    // Human eyes are more sensitive to green, less to blue
-    final distance = (dr * dr * 0.3 + dg * dg * 0.59 + db * db * 0.11);
-    return (1.0 - sqrt(distance)).clamp(0.0, 1.0);
-  }
-
-  Color _getSimilarityColor() {
-    if (_similarity >= widget.puzzle.accuracyThreshold) {
-      return Colors.green;
-    } else if (_similarity >= 0.8) {
-      return Colors.orange;
-    } else {
-      return Colors.red;
-    }
-  }
-
-  @override
-  void dispose() {
-    // Cancel timers
-    _gameTimer?.cancel();
-    _sequenceTimer?.cancel();
-
-    // Dispose animation controllers
-    _boardAnimationController.dispose();
-    _cardFlipController.dispose();
-    _feedbackAnimationController.dispose();
-
-    super.dispose();
+    // Start with intro animation
+    _scaleController.reset();
+    _scaleController.forward();
   }
 
   @override
   Widget build(BuildContext context) {
+    final gridSize = _getGridSize();
+    final hasSequence = _gameMode == GameMode.sequenceMemory;
+
     return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        // Game header with status
-        _buildGameHeader(),
+        // Game stats and info
+        _buildGameInfo(),
 
-        const SizedBox(height: 8),
+        const SizedBox(height: 16),
 
-        // Game board
+        // Card grid
         Expanded(
-          child: _buildGameBoard(),
+          child: Center(
+            child: AspectRatio(
+              aspectRatio: 1.0,
+              child: AnimatedBuilder(
+                animation: _shakeAnimation,
+                builder: (context, child) {
+                  return Transform.translate(
+                    offset: Offset(
+                      _shakeController.isAnimating ? _shakeAnimation.value : 0.0,
+                      0.0,
+                    ),
+                    child: child,
+                  );
+                },
+                child: AnimatedBuilder(
+                  animation: _scaleController,
+                  builder: (context, child) {
+                    return Transform.scale(
+                      scale: _scaleController.value,
+                      child: child,
+                    );
+                  },
+                  child: GridView.builder(
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: gridSize,
+                      crossAxisSpacing: 8,
+                      mainAxisSpacing: 8,
+                    ),
+                    itemCount: _cards.length,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemBuilder: (context, index) {
+                      return _buildCard(index);
+                    },
+                  ),
+                ),
+              ),
+            ),
+          ),
         ),
 
-        // Game controls
-        _buildGameControls(),
+        if (hasSequence && _isPlayerTurn)
+          Padding(
+            padding: const EdgeInsets.only(top: 16),
+            child: LinearProgressIndicator(
+              value: _timerController.value,
+              minHeight: 8,
+              backgroundColor: Colors.grey.shade300,
+              valueColor: AlwaysStoppedAnimation<Color>(
+                _timerController.value > 0.5
+                    ? Colors.green
+                    : (_timerController.value > 0.2 ? Colors.orange : Colors.red),
+              ),
+            ),
+          ),
+
+        const SizedBox(height: 16),
+
+        // Game instructions
+        _buildInstructions(),
       ],
     );
   }
 
-  Widget _buildGameHeader() {
+  Widget _buildGameInfo() {
+    String modeName;
+
+    switch (_gameMode) {
+      case GameMode.classicMatch:
+        modeName = 'Classic Match';
+        break;
+      case GameMode.complementaryMatch:
+        modeName = 'Complementary Pairs';
+        break;
+      case GameMode.sequenceMemory:
+        modeName = 'Color Sequence';
+        break;
+      case GameMode.mixingMemory:
+        modeName = 'Color Mixing';
+        break;
+    }
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        // Mode info
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.indigo.withOpacity(0.7),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                _getModeIcon(),
+                color: Colors.white,
+                size: 16,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                modeName,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // Game stats (moves, pairs)
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.blueGrey.withOpacity(0.7),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: _gameMode != GameMode.sequenceMemory
+              ? Text(
+                  'Moves: $_moves | Pairs: $_matchedPairs/${_cards.length ~/ 2}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                )
+              : Text(
+                  'Sequence: ${_sequenceStep}/${_sequence.length}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+        ),
+      ],
+    );
+  }
+
+  IconData _getModeIcon() {
+    switch (_gameMode) {
+      case GameMode.classicMatch:
+        return Icons.grid_view;
+      case GameMode.complementaryMatch:
+        return Icons.swap_horiz;
+      case GameMode.sequenceMemory:
+        return Icons.format_list_numbered;
+      case GameMode.mixingMemory:
+        return Icons.palette;
+    }
+  }
+
+  Widget _buildCard(int index) {
+    final card = _cards[index];
+
+    return AnimatedBuilder(
+      animation: _rotationController,
+      builder: (context, child) {
+        double extraRotation = 0.0;
+        if (_levelCompleted && _rotationController.isAnimating) {
+          extraRotation = sin(_rotationController.value * 3 * pi) * 0.1;
+        }
+
+        return Transform(
+          transform: Matrix4.identity()
+            ..setEntry(3, 2, 0.001) // Perspective
+            ..rotateY(extraRotation),
+          alignment: Alignment.center,
+          child: child,
+        );
+      },
+      child: GestureDetector(
+        onTap: () => _handleCardTap(index),
+        child: _buildFlipCard(card),
+      ),
+    );
+  }
+
+  Widget _buildFlipCard(MemoryCard card) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 500),
+      transitionBuilder: (Widget child, Animation<double> animation) {
+        final rotateAnimation = Tween<double>(begin: pi, end: 0.0).animate(animation);
+        return AnimatedBuilder(
+          animation: rotateAnimation,
+          child: child,
+          builder: (context, child) {
+            final isBack = rotateAnimation.value > (pi / 2);
+            return Transform(
+              transform: Matrix4.identity()
+                ..setEntry(3, 2, 0.001) // Perspective
+                ..rotateY(rotateAnimation.value),
+              alignment: Alignment.center,
+              child: isBack
+                  ? _buildCardFace(card.backColor, false, card.isMatched)
+                  : _buildCardFace(card.frontColor, true, card.isMatched, card.isHighlighted),
+            );
+          },
+        );
+      },
+      child: card.isFlipped
+          ? _buildCardFace(card.frontColor, true, card.isMatched, card.isHighlighted)
+          : _buildCardFace(card.backColor, false, card.isMatched),
+    );
+  }
+
+  Widget _buildCardFace(Color color, bool isFront, bool isMatched, [bool isHighlighted = false]) {
+    return Container(
+      key: ValueKey<bool>(isFront),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.3),
+            blurRadius: 5,
+            offset: Offset(0, _cardDepth / 2),
+          ),
+        ],
+        border: isHighlighted
+            ? Border.all(color: Colors.white, width: 4)
+            : isMatched
+                ? Border.all(color: Colors.greenAccent, width: 3)
+                : Border.all(color: Colors.white.withOpacity(0.3), width: 1),
+      ),
+      child: isFront
+          ? Center(
+              child: isMatched
+                  ? const Icon(
+                      Icons.check_circle,
+                      color: Colors.white,
+                      size: 30,
+                    )
+                  : null,
+            )
+          : Center(
+              child: Icon(
+                Icons.question_mark,
+                color: Colors.white.withOpacity(0.7),
+                size: 30,
+              ),
+            ),
+    );
+  }
+
+  Widget _buildInstructions() {
+    String instruction = '';
+
+    switch (_gameMode) {
+      case GameMode.classicMatch:
+        instruction = 'Find matching pairs of identical colors';
+        break;
+      case GameMode.complementaryMatch:
+        instruction = 'Match each color with its complementary color';
+        break;
+      case GameMode.sequenceMemory:
+        if (_showingSequence) {
+          instruction = 'Watch the color sequence carefully...';
+        } else if (_isPlayerTurn) {
+          instruction = 'Now repeat the sequence in order!';
+        } else {
+          instruction = 'Remember the sequence of colors shown';
+        }
+        break;
+      case GameMode.mixingMemory:
+        instruction = 'Find the component colors that create each mix';
+        break;
+    }
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
+        color: Colors.black.withOpacity(0.3),
         borderRadius: BorderRadius.circular(16),
       ),
-      child: Column(
-        children: [
-          // Game stats
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              // Score
-              Row(
-                children: [
-                  Icon(
-                    Icons.score,
-                    color: Theme.of(context).colorScheme.primary,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Score: $_score',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
-
-              // Time if applicable
-              if (_gameState == GameState.playing && _remainingTime > 0)
-                Row(
-                  children: [
-                    Icon(
-                      Icons.timer,
-                      color: _remainingTime < 10 ? Colors.red : Theme.of(context).colorScheme.primary,
-                      size: 20,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      '$_remainingTime s',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: _remainingTime < 10 ? Colors.red : null,
-                      ),
-                    ),
-                  ],
-                )
-              else if (_gameMode == GameMode.colorSequence && _isShowingSequence)
-                const Text(
-                  'Memorize the sequence!',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.blue,
-                  ),
-                ),
-
-              // Matches/Pairs
-              if (_gameMode != GameMode.colorSequence)
-                Row(
-                  children: [
-                    Icon(
-                      Icons.grid_view,
-                      color: Theme.of(context).colorScheme.primary,
-                      size: 20,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      'Pairs: ${_correctMatches}/${_correctMatches + _remainingPairs}',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                )
-              else
-                Row(
-                  children: [
-                    Icon(
-                      Icons.repeat,
-                      color: Theme.of(context).colorScheme.primary,
-                      size: 20,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      'Sequence: ${_revealedCount}/${_colorSequence.length}',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-            ],
-          ),
-
-          const SizedBox(height: 8),
-
-          // Target color display for sequence mode
-          if (_gameMode == GameMode.colorSequence && (_gameState == GameState.playing || _isShowingSequence))
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Text(
-                  'Find this color: ',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                Container(
-                  width: 24,
-                  height: 24,
-                  decoration: BoxDecoration(
-                    color: _targetColor,
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: Colors.white,
-                      width: 2,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: _targetColor.withOpacity(0.3),
-                        blurRadius: 4,
-                        spreadRadius: 1,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildGameBoard() {
-    // Calculate grid dimensions
-    int gridSize = sqrt(_cards.length).ceil();
-
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: AnimatedBuilder(
-        animation: _boardAnimation,
-        builder: (context, child) {
-          return Transform.scale(
-            scale: _boardAnimation.value,
-            child: Center(
-              child: AspectRatio(
-                aspectRatio: 1.0,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.surface.withOpacity(0.9),
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
-                        blurRadius: 8,
-                        spreadRadius: 2,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: _gameState == GameState.notStarted
-                      ? _buildStartGamePrompt()
-                      : GridView.builder(
-                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: gridSize,
-                            childAspectRatio: 1.0,
-                            crossAxisSpacing: 4,
-                            mainAxisSpacing: 4,
-                          ),
-                          itemCount: _cards.length,
-                          physics: const NeverScrollableScrollPhysics(),
-                          padding: const EdgeInsets.all(8),
-                          itemBuilder: (context, index) {
-                            return _buildCard(_cards[index]);
-                          },
-                        ),
-                ),
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildStartGamePrompt() {
-    String gameModeDescription;
-    IconData gameModeIcon;
-
-    switch (_gameMode) {
-      case GameMode.colorMatching:
-        gameModeDescription = 'Find matching color pairs';
-        gameModeIcon = Icons.palette;
-        break;
-      case GameMode.colorSequence:
-        gameModeDescription = 'Memorize and repeat color sequences';
-        gameModeIcon = Icons.repeat;
-        break;
-      case GameMode.colorRelationships:
-        gameModeDescription = 'Find related color pairs';
-        gameModeIcon = Icons.compare_arrows;
-        break;
-      case GameMode.mixedMode:
-        gameModeDescription = 'Mixed color challenges';
-        gameModeIcon = Icons.auto_awesome;
-        break;
-    }
-
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            gameModeIcon,
-            size: 60,
-            color: Theme.of(context).colorScheme.primary,
-          ),
-          const SizedBox(height: 16),
-          Text(
-            _gameMode.toString().split('.').last,
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            gameModeDescription,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 16,
-              color: Theme.of(context).colorScheme.onSurface,
-            ),
-          ),
-          const SizedBox(height: 24),
-          ElevatedButton.icon(
-            onPressed: _startGame,
-            icon: const Icon(Icons.play_arrow),
-            label: const Text('Start Game'),
-            style: ElevatedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCard(MemoryCard card) {
-    final isFlipped = card.isFlipped || card.isMatched;
-
-    return AnimatedBuilder(
-      animation: _cardFlipController,
-      builder: (context, child) {
-        // Calculate rotation for the flip animation
-        double flipValue = 0.0;
-        if (_cardFlipAnimation != null && _selectedCards.contains(card)) {
-          flipValue = _cardFlipAnimation!.value;
-        } else if (isFlipped) {
-          flipValue = 1.0;
-        }
-
-        return GestureDetector(
-          onTap: () => _onCardTap(card),
-          child: AnimatedScale(
-            scale: card.isMatched ? 0.95 : 1.0,
-            duration: const Duration(milliseconds: 200),
-            child: Transform(
-              transform: Matrix4.identity()
-                ..setEntry(3, 2, 0.001) // Perspective
-                ..rotateY(flipValue * pi),
-              alignment: Alignment.center,
-              child: flipValue < 0.5
-                  ? _buildCardBack(card)
-                  : Transform(
-                      transform: Matrix4.identity()..rotateY(pi),
-                      alignment: Alignment.center,
-                      child: _buildCardFront(card),
-                    ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildCardBack(MemoryCard card) {
-    return Container(
-      margin: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.primaryContainer,
-        borderRadius: BorderRadius.circular(8),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-            blurRadius: 2,
-            offset: const Offset(0, 1),
-          ),
-        ],
-      ),
-      child: Center(
-        child: Icon(
-          Icons.question_mark,
-          color: Theme.of(context).colorScheme.onPrimaryContainer,
-          size: 24,
+      child: Text(
+        instruction,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.bold,
         ),
+        textAlign: TextAlign.center,
       ),
     );
-  }
-
-  Widget _buildCardFront(MemoryCard card) {
-    return Container(
-      margin: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: card.color,
-        borderRadius: BorderRadius.circular(8),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-            blurRadius: 2,
-            offset: const Offset(0, 1),
-          ),
-        ],
-        border: card.isMatched
-            ? Border.all(
-                color: Colors.white,
-                width: 2,
-              )
-            : null,
-      ),
-      child: Center(
-        child: card.isMatched
-            ? const Icon(
-                Icons.check_circle,
-                color: Colors.white,
-                size: 24,
-              )
-            : null,
-      ),
-    );
-  }
-
-  Widget _buildGameControls() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(16),
-          topRight: Radius.circular(16),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 4,
-            offset: const Offset(0, -1),
-          ),
-        ],
-      ),
-      child: AnimatedBuilder(
-        animation: _feedbackAnimation,
-        builder: (context, child) {
-          final scale = _feedbackAnimationController.isAnimating ? 1.0 + (_feedbackAnimation.value * 0.1) : 1.0;
-
-          return Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              // Color preview
-              if (_gameState == GameState.playing || _gameState == GameState.success || _gameState == GameState.failed)
-                Transform.scale(
-                  scale: scale,
-                  child: Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: _targetColor,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: Colors.white,
-                        width: 2,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: _targetColor.withOpacity(0.3),
-                          blurRadius: 4,
-                          spreadRadius: 1,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-
-              const SizedBox(width: 16),
-
-              // Game instructions
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      _getGameModeTitle(),
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                    ),
-                    Text(
-                      _getGameModeInstruction(),
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              // Restart button if game is in progress or complete
-              if (_gameState == GameState.playing || _gameState == GameState.success || _gameState == GameState.failed)
-                TextButton.icon(
-                  onPressed: _restartGame,
-                  icon: const Icon(Icons.refresh, size: 16),
-                  label: const Text('Restart'),
-                ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  String _getGameModeTitle() {
-    switch (_gameState) {
-      case GameState.notStarted:
-        return 'Get Ready to Play!';
-      case GameState.playing:
-        switch (_gameMode) {
-          case GameMode.colorMatching:
-            return 'Find Matching Pairs';
-          case GameMode.colorSequence:
-            return 'Remember the Sequence';
-          case GameMode.colorRelationships:
-            return 'Match Related Colors';
-          case GameMode.mixedMode:
-            return 'Color Challenge';
-        }
-      case GameState.success:
-        return 'Great Job!';
-      case GameState.failed:
-        return 'Time\'s Up!';
-    }
-  }
-
-  String _getGameModeInstruction() {
-    switch (_gameState) {
-      case GameState.notStarted:
-        return 'Press Start Game to begin the challenge';
-      case GameState.playing:
-        switch (_gameMode) {
-          case GameMode.colorMatching:
-            return 'Tap cards to find matching color pairs';
-          case GameMode.colorSequence:
-            return 'Tap the colors in the same order they were shown';
-          case GameMode.colorRelationships:
-            return 'Find pairs of colors that have a relationship';
-          case GameMode.mixedMode:
-            return 'Complete the current color challenge';
-        }
-      case GameState.success:
-        return 'You completed the challenge! Great color memory.';
-      case GameState.failed:
-        return 'You ran out of time. Try again!';
-    }
   }
 }
 
-// Enums for game state
-enum GameState {
-  notStarted,
-  playing,
-  success,
-  failed,
-}
-
-// Enums for game modes
+// The different game modes
 enum GameMode {
-  colorMatching,
-  colorSequence,
-  colorRelationships,
-  mixedMode,
-}
-
-// Enums for card types
-enum CardType {
-  color,
-  relatedColor,
-}
-
-// Enums for color relationships
-enum RelationshipType {
-  complementary,
-  analogous,
-  monochromatic,
+  classicMatch, // Match identical colors
+  complementaryMatch, // Match complementary colors
+  sequenceMemory, // Remember and reproduce a color sequence
+  mixingMemory, // Match mixed colors with their components
 }
 
 // Class to represent a memory card
 class MemoryCard {
   final int id;
-  final Color color;
+  final Color frontColor;
+  final Color backColor;
   bool isFlipped;
   bool isMatched;
-  final int pairId;
-  final CardType type;
-  int gridX = 0;
-  int gridY = 0;
-  RelationshipType? relationshipType;
-  String? relationshipName;
+  bool isHighlighted;
+  int? matchId; // For matching specific pairs (complementary or mixing)
+  bool isMix; // Is this a mixed color card
 
   MemoryCard({
     required this.id,
-    required this.color,
+    required this.frontColor,
+    required this.backColor,
     required this.isFlipped,
     required this.isMatched,
-    required this.pairId,
-    required this.type,
-    this.relationshipType,
-    this.relationshipName,
+    this.isHighlighted = false,
+    this.matchId,
+    this.isMix = false,
   });
 }

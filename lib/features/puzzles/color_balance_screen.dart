@@ -203,14 +203,6 @@ class _ColorBalanceScreenState extends ConsumerState<ColorBalanceScreen> with Ti
     );
   }
 
-  void _resetLevel() {
-    setState(() {
-      _attempts = 0;
-      _showHint = false;
-    });
-    ref.read(userMixedColorProvider.notifier).reset();
-  }
-
   void _toggleHint() {
     setState(() {
       _showHint = !_showHint;
@@ -228,6 +220,10 @@ class _ColorBalanceScreenState extends ConsumerState<ColorBalanceScreen> with Ti
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
+        leading: IconButton(
+          icon: Icon(Icons.arrow_back_ios, color: Colors.orange.shade200),
+          onPressed: () => context.pop(),
+        ),
         title: Text(
           'Color Balance',
           style: TextStyle(
@@ -242,11 +238,6 @@ class _ColorBalanceScreenState extends ConsumerState<ColorBalanceScreen> with Ti
             onPressed: _toggleHint,
             tooltip: 'Show Hint',
           ),
-          IconButton(
-            icon: Icon(Icons.refresh, color: Colors.orange.shade200),
-            onPressed: _resetLevel,
-            tooltip: 'Reset Level',
-          ),
         ],
       ),
       body: AnimatedBuilder(
@@ -257,14 +248,18 @@ class _ColorBalanceScreenState extends ConsumerState<ColorBalanceScreen> with Ti
             particle.position += particle.velocity;
 
             // Wrap around screen edges
-            if (particle.position.dx < -particle.radius)
+            if (particle.position.dx < -particle.radius) {
               particle.position = Offset(MediaQuery.of(context).size.width + particle.radius, particle.position.dy);
-            if (particle.position.dx > MediaQuery.of(context).size.width + particle.radius)
+            }
+            if (particle.position.dx > MediaQuery.of(context).size.width + particle.radius) {
               particle.position = Offset(-particle.radius, particle.position.dy);
-            if (particle.position.dy < -particle.radius)
+            }
+            if (particle.position.dy < -particle.radius) {
               particle.position = Offset(particle.position.dx, MediaQuery.of(context).size.height + particle.radius);
-            if (particle.position.dy > MediaQuery.of(context).size.height + particle.radius)
+            }
+            if (particle.position.dy > MediaQuery.of(context).size.height + particle.radius) {
               particle.position = Offset(particle.position.dx, -particle.radius);
+            }
           }
 
           return Stack(
@@ -460,135 +455,10 @@ class _ColorBalanceScreenState extends ConsumerState<ColorBalanceScreen> with Ti
     );
   }
 
-  Widget _buildBalanceHeader(BuildContext context, Puzzle puzzle, Color userColor) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF302118),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Colors.orange.shade800.withOpacity(0.5),
-          width: 1,
-        ),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.orange.shade800.withOpacity(0.2),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  Icons.balance,
-                  color: Colors.orange.shade200,
-                  size: 24,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      puzzle.title,
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.orange.shade200,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      puzzle.description,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: Colors.white70,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-
-          // Attempt counter
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.brown.shade900.withOpacity(0.5),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.history,
-                  size: 16,
-                  color: Colors.orange.shade200,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  'Attempts: $_attempts/${puzzle.maxAttempts}',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: _attempts >= puzzle.maxAttempts * 0.7 ? Colors.red.shade300 : Colors.orange.shade200,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Color _getSimilarityColor(Color userColor, Color targetColor, double threshold) {
-    final similarity = _calculateSimilarity(userColor, targetColor);
-    if (similarity >= threshold) {
-      return Colors.green;
-    } else if (similarity >= 0.7) {
-      return Colors.orange;
-    } else {
-      return Colors.red;
-    }
-  }
-
-  double _calculateSimilarity(Color a, Color b) {
-    // Calculate color similarity (normalized between 0 and 1)
-    final dr = (a.red - b.red) / 255.0;
-    final dg = (a.green - b.green) / 255.0;
-    final db = (a.blue - b.blue) / 255.0;
-
-    // Human eyes are more sensitive to green, less to blue
-    final distance = (dr * dr * 0.3 + dg * dg * 0.59 + db * db * 0.11);
-    return (1.0 - sqrt(distance)).clamp(0.0, 1.0);
-  }
-
   Widget _buildActionButtons(BuildContext context, Puzzle puzzle, AsyncValue<bool?> resultAsync) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        ElevatedButton.icon(
-          onPressed: _resetLevel,
-          icon: const Icon(Icons.refresh),
-          label: const Text('Reset'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.brown.shade800,
-            foregroundColor: Colors.orange.shade200,
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-          ),
-        ),
-        const SizedBox(width: 16),
         ElevatedButton.icon(
           onPressed: resultAsync.isLoading ? null : () => _checkResult(context, puzzle),
           icon: resultAsync.isLoading

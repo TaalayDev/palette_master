@@ -2,7 +2,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
-import 'package:palette_master/core/ClassicMixingLevelGenerator.dart';
+import 'package:palette_master/core/color_mixing_level_generator.dart';
 
 class ColorDroplet extends StatefulWidget {
   final Color color;

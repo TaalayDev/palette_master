@@ -28,72 +28,92 @@ class _ColorWaveScreenState extends ConsumerState<ColorWaveScreen> with TickerPr
   bool _showLevelComplete = false;
   int _attempts = 0;
   bool _showHint = false;
+  bool _showInfo = true;
+  final _selectedColor = ValueNotifier(Colors.transparent);
 
   // Animation controllers
-  late AnimationController _bgWaveController;
-  late AnimationController _bgGradientController;
-  late AnimationController _pulseController;
-  late Animation<double> _pulseAnimation;
+  late AnimationController _bgController;
+  late AnimationController _scaleController;
+  late Animation<double> _scaleAnimation;
+  late AnimationController _colorPaletteController;
+  late Animation<double> _colorPaletteAnimation;
 
-  // Background waves
-  List<_BackgroundWave> _backgroundWaves = [];
+  // Background particles
+  final List<_BackgroundParticle> _particles = [];
   final Random _random = Random();
 
   @override
   void initState() {
     super.initState();
 
-    // Background wave animation
-    _bgWaveController = AnimationController(
+    // Background animation
+    _bgController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 10),
     )..repeat();
 
-    // Background gradient animation
-    _bgGradientController = AnimationController(
+    // Scale animation for UI elements
+    _scaleController = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 15),
-    )..repeat();
-
-    // Pulse animation for UI elements
-    _pulseController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1500),
-    )..repeat(reverse: true);
-
-    _pulseAnimation = Tween<double>(begin: 1.0, end: 1.05).animate(
-      CurvedAnimation(
-        parent: _pulseController,
-        curve: Curves.easeInOut,
-      ),
+      duration: const Duration(milliseconds: 800),
     );
+    _scaleAnimation = CurvedAnimation(
+      parent: _scaleController,
+      curve: Curves.easeOutBack,
+    );
+    _scaleController.forward();
 
-    // Generate background waves
-    _generateBackgroundWaves();
+    // Color palette animation
+    _colorPaletteController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
+    );
+    _colorPaletteAnimation = CurvedAnimation(
+      parent: _colorPaletteController,
+      curve: Curves.easeInOut,
+    );
+    _colorPaletteController.forward();
+
+    // Generate background particles
+    _generateParticles();
+
+    // Hide info box after a delay
+    Future.delayed(const Duration(seconds: 5), () {
+      if (mounted) {
+        setState(() {
+          _showInfo = false;
+        });
+      }
+    });
   }
 
-  void _generateBackgroundWaves() {
-    _backgroundWaves = List.generate(3, (index) {
-      return _BackgroundWave(
+  void _generateParticles() {
+    for (int i = 0; i < 40; i++) {
+      _particles.add(_BackgroundParticle(
+        position: Offset(
+          _random.nextDouble() * 500,
+          _random.nextDouble() * 800,
+        ),
+        velocity: Offset(
+          (_random.nextDouble() - 0.5) * 0.3,
+          (_random.nextDouble() - 0.5) * 0.3,
+        ),
+        radius: _random.nextDouble() * 15 + 3,
         color: HSVColor.fromAHSV(
-          0.3 + (_random.nextDouble() * 0.2),
-          (120.0 * index) % 360, // Evenly spaced hues
+          0.1 + _random.nextDouble() * 0.1,
+          _random.nextDouble() * 360,
           0.7,
           0.9,
         ).toColor(),
-        amplitude: 30 + _random.nextDouble() * 20,
-        frequency: 0.5 + _random.nextDouble() * 0.5,
-        speed: 0.2 + _random.nextDouble() * 0.3,
-        phase: _random.nextDouble() * 2 * pi,
-      );
-    });
+      ));
+    }
   }
 
   @override
   void dispose() {
-    _bgWaveController.dispose();
-    _bgGradientController.dispose();
-    _pulseController.dispose();
+    _bgController.dispose();
+    _scaleController.dispose();
+    _colorPaletteController.dispose();
     super.dispose();
   }
 
@@ -120,17 +140,22 @@ class _ColorWaveScreenState extends ConsumerState<ColorWaveScreen> with TickerPr
       } else if (_attempts >= puzzle.maxAttempts) {
         _handleFailure();
       } else {
-        // Show feedback for wave mismatch
+        // Failed match
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Waves not aligned yet. Adjust their properties to match the target gradient!',
+              'Not quite right! Try adjusting your wave pattern.',
               style: TextStyle(color: Colors.teal.shade100),
             ),
             backgroundColor: Colors.teal.shade800,
             behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(10),
+            ),
+            action: SnackBarAction(
+              label: 'Hint',
+              textColor: Colors.white,
+              onPressed: () => _toggleHint(),
             ),
           ),
         );
@@ -159,9 +184,9 @@ class _ColorWaveScreenState extends ConsumerState<ColorWaveScreen> with TickerPr
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF0A2F35),
+        backgroundColor: Colors.teal.shade900,
         title: Text(
-          'Waves Out of Sync',
+          'Wave Interference Failed!',
           style: TextStyle(color: Colors.teal.shade200),
         ),
         content: const Text(
@@ -186,6 +211,7 @@ class _ColorWaveScreenState extends ConsumerState<ColorWaveScreen> with TickerPr
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.teal.shade700,
+              foregroundColor: Colors.white,
             ),
             child: const Text('Retry'),
           ),
@@ -208,17 +234,29 @@ class _ColorWaveScreenState extends ConsumerState<ColorWaveScreen> with TickerPr
     );
   }
 
+  void _toggleHint() {
+    setState(() {
+      _showHint = !_showHint;
+    });
+
+    // If showing hint, hide the color palette
+    if (_showHint) {
+      _colorPaletteController.reverse();
+    } else {
+      _colorPaletteController.forward();
+    }
+  }
+
   void _resetLevel() {
     setState(() {
       _attempts = 0;
-      _showHint = false;
     });
     ref.read(userMixedColorProvider.notifier).reset();
   }
 
-  void _toggleHint() {
+  void _selectColor(Color color) {
     setState(() {
-      _showHint = !_showHint;
+      _selectedColor.value = color;
     });
   }
 
@@ -227,75 +265,93 @@ class _ColorWaveScreenState extends ConsumerState<ColorWaveScreen> with TickerPr
     final puzzleAsync = ref.watch(puzzleStateProvider(widget.puzzleId, widget.level));
     final userColor = ref.watch(userMixedColorProvider);
     final resultAsync = ref.watch(puzzleResultProvider);
+    final Size size = MediaQuery.of(context).size;
 
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: Row(
-          children: [
-            Icon(Icons.waves, color: Colors.teal.shade200),
-            const SizedBox(width: 8),
-            Text(
-              'Color Wave - Level ${widget.level}',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: Colors.teal.shade200,
-              ),
-            ),
-          ],
+        leading: IconButton(
+          icon: Icon(Icons.arrow_back_ios, color: Colors.teal.shade200),
+          onPressed: () => context.go(AppRoutes.gameSelection.path),
         ),
+        title: Text(
+          'Color Wave',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: Colors.teal.shade200,
+          ),
+        ),
+        centerTitle: true,
         actions: [
           IconButton(
-            icon: Icon(Icons.info_outline, color: Colors.teal.shade200),
-            onPressed: _toggleHint,
-            tooltip: 'Show Hint',
-          ),
-          IconButton(
-            icon: Icon(Icons.refresh, color: Colors.teal.shade200),
-            onPressed: _resetLevel,
-            tooltip: 'Reset Level',
+            icon: Icon(
+              _showInfo ? Icons.visibility_off : Icons.info_outline,
+              color: Colors.teal.shade200,
+            ),
+            onPressed: () {
+              setState(() {
+                _showInfo = !_showInfo;
+              });
+            },
           ),
         ],
       ),
       body: AnimatedBuilder(
-        animation: Listenable.merge([_bgWaveController, _bgGradientController]),
+        animation: _bgController,
         builder: (context, child) {
+          // Update particle positions
+          for (var particle in _particles) {
+            particle.position += particle.velocity;
+
+            // Wrap around screen edges
+            if (particle.position.dx < -particle.radius) {
+              particle.position = Offset(size.width + particle.radius, particle.position.dy);
+            }
+            if (particle.position.dx > size.width + particle.radius) {
+              particle.position = Offset(-particle.radius, particle.position.dy);
+            }
+            if (particle.position.dy < -particle.radius) {
+              particle.position = Offset(particle.position.dx, size.height + particle.radius);
+            }
+            if (particle.position.dy > size.height + particle.radius) {
+              particle.position = Offset(particle.position.dx, -particle.radius);
+            }
+          }
+
           return Stack(
             children: [
-              // Animated gradient background
+              // Background gradient
               Container(
-                decoration: BoxDecoration(
+                decoration: const BoxDecoration(
                   gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
                     colors: [
-                      HSVColor.fromAHSV(
-                        1.0,
-                        (_bgGradientController.value * 360) % 360,
-                        0.3,
-                        0.2,
-                      ).toColor(),
-                      HSVColor.fromAHSV(
-                        1.0,
-                        ((_bgGradientController.value * 360) + 60) % 360,
-                        0.3,
-                        0.3,
-                      ).toColor(),
+                      Color(0xFF094A4C),
+                      Color(0xFF052A2C),
                     ],
                   ),
                 ),
               ),
 
-              // Background waves
-              CustomPaint(
-                size: MediaQuery.of(context).size,
-                painter: _BackgroundWavePainter(
-                  waves: _backgroundWaves,
-                  animationValue: _bgWaveController.value,
-                ),
-              ),
+              // Background particles
+              ...List.generate(_particles.length, (index) {
+                final particle = _particles[index];
+                return Positioned(
+                  left: particle.position.dx - particle.radius,
+                  top: particle.position.dy - particle.radius,
+                  child: Container(
+                    width: particle.radius * 2,
+                    height: particle.radius * 2,
+                    decoration: BoxDecoration(
+                      color: particle.color,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                );
+              }),
 
               // Main content
               SafeArea(
@@ -315,56 +371,155 @@ class _ColorWaveScreenState extends ConsumerState<ColorWaveScreen> with TickerPr
                 // Main game content
                 Padding(
                   padding: const EdgeInsets.all(AppConstants.defaultPadding),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // Wave-themed header
-                      _buildWaveHeader(context, puzzle, userColor),
+                  child: AnimatedBuilder(
+                    animation: _scaleAnimation,
+                    builder: (context, child) {
+                      return Transform.scale(
+                        scale: _scaleAnimation.value,
+                        child: child,
+                      );
+                    },
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        // Level info and color previews
+                        if (_showInfo)
+                          AnimatedOpacity(
+                            opacity: _showInfo ? 1.0 : 0.0,
+                            duration: const Duration(milliseconds: 300),
+                            child: _buildInfoHeader(puzzle, userColor),
+                          ),
 
-                      const SizedBox(height: 16),
+                        const SizedBox(height: 8),
 
-                      // Game area
-                      Expanded(
-                        child: Hero(
-                          tag: 'wave-game',
-                          child: Material(
-                            type: MaterialType.transparency,
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: Colors.black.withOpacity(0.2),
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(
-                                  color: Colors.teal.shade200.withOpacity(0.3),
-                                  width: 1,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.3),
-                                    blurRadius: 15,
-                                    spreadRadius: 2,
+                        // Game area
+                        Expanded(
+                          child: Hero(
+                            tag: 'wave-game',
+                            child: Material(
+                              type: MaterialType.transparency,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(
+                                    color: Colors.teal.shade700.withOpacity(0.5),
+                                    width: 1,
                                   ),
-                                ],
-                              ),
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(20),
-                                child: ColorWaveGame(
-                                  puzzle: puzzle,
-                                  userColor: userColor,
-                                  onColorMixed: (color) {
-                                    ref.read(userMixedColorProvider.notifier).setColor(color);
-                                  },
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.3),
+                                      blurRadius: 15,
+                                      spreadRadius: 2,
+                                    ),
+                                  ],
+                                ),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(20),
+                                  child: ColorWaveGame(
+                                    level: widget.level,
+                                    targetColor: puzzle.targetColor,
+                                    availableColors: puzzle.availableColors,
+                                    onColorMixed: (color) {
+                                      ref.read(userMixedColorProvider.notifier).setColor(color);
+                                    },
+                                    onReset: _resetLevel,
+                                    selectedColorNotifier: _selectedColor,
+                                  ),
                                 ),
                               ),
                             ),
                           ),
                         ),
-                      ),
 
-                      const SizedBox(height: 20),
+                        const SizedBox(height: 16),
 
-                      // Action buttons
-                      _buildActionButtons(context, puzzle, resultAsync),
-                    ],
+                        // Color palette
+                        AnimatedBuilder(
+                          animation: _colorPaletteAnimation,
+                          builder: (context, child) {
+                            return AnimatedContainer(
+                              duration: const Duration(milliseconds: 300),
+                              height: 70 * _colorPaletteAnimation.value,
+                              child: Opacity(
+                                opacity: _colorPaletteAnimation.value,
+                                child: child,
+                              ),
+                            );
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: Colors.teal.shade700.withOpacity(0.3),
+                                width: 1,
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              children: [
+                                ...puzzle.availableColors.map((color) {
+                                  final isSelected = _selectedColor.value == color;
+                                  return GestureDetector(
+                                    onTap: () => _selectColor(color),
+                                    child: AnimatedContainer(
+                                      duration: const Duration(milliseconds: 200),
+                                      width: 40,
+                                      height: 40,
+                                      decoration: BoxDecoration(
+                                        color: color,
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                          color: isSelected ? Colors.white : Colors.transparent,
+                                          width: 3,
+                                        ),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: color.withOpacity(0.5),
+                                            blurRadius: isSelected ? 10 : 5,
+                                            spreadRadius: isSelected ? 2 : 0,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                }).toList(),
+
+                                // Reset selection button
+                                GestureDetector(
+                                  onTap: () => _selectColor(Colors.transparent),
+                                  child: Container(
+                                    width: 40,
+                                    height: 40,
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey.shade800,
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: _selectedColor.value == Colors.transparent
+                                            ? Colors.white
+                                            : Colors.transparent,
+                                        width: 3,
+                                      ),
+                                    ),
+                                    child: const Icon(
+                                      Icons.clear,
+                                      color: Colors.white,
+                                      size: 20,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 16),
+
+                        // Action buttons
+                        _buildActionButtons(context, puzzle, resultAsync),
+                      ],
+                    ),
                   ),
                 ),
 
@@ -395,7 +550,7 @@ class _ColorWaveScreenState extends ConsumerState<ColorWaveScreen> with TickerPr
                 ),
                 const SizedBox(height: 20),
                 Text(
-                  'Generating Waves...',
+                  'Generating Wave Patterns...',
                   style: TextStyle(
                     color: Colors.teal.shade200,
                     fontSize: 20,
@@ -449,236 +604,231 @@ class _ColorWaveScreenState extends ConsumerState<ColorWaveScreen> with TickerPr
     );
   }
 
-  Widget _buildWaveHeader(BuildContext context, Puzzle puzzle, Color userColor) {
-    return AnimatedBuilder(
-      animation: _pulseAnimation,
-      builder: (context, child) {
-        return Transform.scale(
-          scale: _pulseAnimation.value,
-          child: Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.3),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: Colors.teal.shade200.withOpacity(0.5),
-                width: 1,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.3),
-                  blurRadius: 10,
-                  spreadRadius: 1,
-                ),
-              ],
-            ),
-            child: Column(
-              children: [
-                // Title and description
-                Row(
+  Widget _buildInfoHeader(Puzzle puzzle, Color userColor) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Colors.teal.shade700.withOpacity(0.3),
+          width: 1,
+        ),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              // Level info
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.teal.withOpacity(0.2),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        Icons.waves,
-                        color: Colors.teal.shade200,
-                        size: 20,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            puzzle.title,
-                            style: TextStyle(
-                              fontSize: 18,
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.teal.shade800,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            'Level ${widget.level}',
+                            style: const TextStyle(
+                              color: Colors.white,
                               fontWeight: FontWeight.bold,
-                              color: Colors.teal.shade200,
                             ),
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            puzzle.description,
-                            style: const TextStyle(
-                              fontSize: 14,
-                              color: Colors.white70,
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          _getDifficultyLabel(widget.level),
+                          style: TextStyle(
+                            color: Colors.teal.shade200,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _getLevelDescription(widget.level),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Attempt counter
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.3),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.refresh,
+                      color: Colors.white,
+                      size: 16,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Attempts: $_attempts/${puzzle.maxAttempts}',
+                      style: TextStyle(
+                        color: _attempts >= puzzle.maxAttempts - 1 ? Colors.red.shade300 : Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 8),
+
+          // Color targets
+          Row(
+            children: [
+              // Target color
+              Expanded(
+                child: Column(
+                  children: [
+                    const Text(
+                      'Target Color',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Container(
+                      height: 30,
+                      decoration: BoxDecoration(
+                        color: puzzle.targetColor,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: Colors.white,
+                          width: 1,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: puzzle.targetColor.withOpacity(0.5),
+                            blurRadius: 8,
+                            spreadRadius: 2,
                           ),
                         ],
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
+              ),
 
-                // Gradient preview
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              const SizedBox(width: 16),
+
+              // Current mix
+              Expanded(
+                child: Column(
                   children: [
-                    // Target gradient
-                    Column(
-                      children: [
-                        Text(
-                          'Target Gradient',
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.teal.shade200,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Container(
-                          width: 120,
-                          height: 30,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [puzzle.availableColors[0], puzzle.targetColor],
-                              begin: Alignment.centerLeft,
-                              end: Alignment.centerRight,
-                            ),
-                            borderRadius: BorderRadius.circular(15),
-                            border: Border.all(
-                              color: Colors.white.withOpacity(0.3),
-                              width: 1,
-                            ),
-                          ),
-                        ),
-                      ],
+                    const Text(
+                      'Your Mix',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                      ),
                     ),
-
-                    // Similarity indicator
-                    Column(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                          decoration: BoxDecoration(
-                            color: _getSimilarityColor(userColor, puzzle.targetColor, puzzle.accuracyThreshold)
-                                .withOpacity(0.3),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: _getSimilarityColor(userColor, puzzle.targetColor, puzzle.accuracyThreshold),
-                              width: 1,
-                            ),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                _similarity(userColor, puzzle.targetColor) >= puzzle.accuracyThreshold
-                                    ? Icons.check_circle
-                                    : Icons.waves,
-                                color: _getSimilarityColor(userColor, puzzle.targetColor, puzzle.accuracyThreshold),
-                                size: 16,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                '${(_similarity(userColor, puzzle.targetColor) * 100).toInt()}%',
-                                style: TextStyle(
-                                  color: _getSimilarityColor(userColor, puzzle.targetColor, puzzle.accuracyThreshold),
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
+                    const SizedBox(height: 4),
+                    Container(
+                      height: 30,
+                      decoration: BoxDecoration(
+                        color: userColor,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: Colors.white,
+                          width: 1,
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Attempts: $_attempts/${puzzle.maxAttempts}',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: _attempts >= puzzle.maxAttempts * 0.7 ? Colors.red.shade300 : Colors.white70,
+                        boxShadow: [
+                          BoxShadow(
+                            color: userColor.withOpacity(0.5),
+                            blurRadius: 8,
+                            spreadRadius: 2,
                           ),
-                        ),
-                      ],
-                    ),
-
-                    // Your gradient
-                    Column(
-                      children: [
-                        Text(
-                          'Your Gradient',
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.teal.shade200,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Container(
-                          width: 120,
-                          height: 30,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [puzzle.availableColors.last, userColor],
-                              begin: Alignment.centerLeft,
-                              end: Alignment.centerRight,
-                            ),
-                            borderRadius: BorderRadius.circular(15),
-                            border: Border.all(
-                              color: Colors.white.withOpacity(0.3),
-                              width: 1,
-                            ),
-                          ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ],
                 ),
-              ],
-            ),
+              ),
+
+              const SizedBox(width: 16),
+
+              // Match percentage
+              Column(
+                children: [
+                  const Text(
+                    'Match',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Container(
+                    height: 30,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    decoration: BoxDecoration(
+                      color: _getMatchColor(userColor, puzzle.targetColor, puzzle.accuracyThreshold),
+                      borderRadius: BorderRadius.circular(8),
+                      boxShadow: [
+                        BoxShadow(
+                          color:
+                              _getMatchColor(userColor, puzzle.targetColor, puzzle.accuracyThreshold).withOpacity(0.5),
+                          blurRadius: 8,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: Text(
+                        '${(_calculateColorSimilarity(userColor, puzzle.targetColor) * 100).toInt()}%',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
-        );
-      },
+        ],
+      ),
     );
-  }
-
-  double _similarity(Color a, Color b) {
-    // Calculate color similarity (normalized between 0 and 1)
-    final dr = (a.red - b.red) / 255.0;
-    final dg = (a.green - b.green) / 255.0;
-    final db = (a.blue - b.blue) / 255.0;
-
-    // Human eyes are more sensitive to green, less to blue
-    final distance = (dr * dr * 0.3 + dg * dg * 0.59 + db * db * 0.11);
-    return (1.0 - sqrt(distance)).clamp(0.0, 1.0);
-  }
-
-  Color _getSimilarityColor(Color userColor, Color targetColor, double threshold) {
-    final similarity = _similarity(userColor, targetColor);
-    if (similarity >= threshold) {
-      return Colors.green;
-    } else if (similarity >= 0.7) {
-      return Colors.orange;
-    } else {
-      return Colors.red;
-    }
   }
 
   Widget _buildActionButtons(BuildContext context, Puzzle puzzle, AsyncValue<bool?> resultAsync) {
     return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
         ElevatedButton.icon(
-          onPressed: _resetLevel,
-          icon: const Icon(Icons.refresh),
-          label: const Text('Reset'),
+          onPressed: () => _toggleHint(),
+          icon: Icon(_showHint ? Icons.visibility_off : Icons.lightbulb_outline),
+          label: Text(_showHint ? 'Hide Hint' : 'Show Hint'),
           style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.black.withOpacity(0.3),
-            foregroundColor: Colors.teal.shade200,
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            backgroundColor: Colors.teal.shade800,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
             ),
           ),
         ),
-        const SizedBox(width: 16),
         ElevatedButton.icon(
           onPressed: resultAsync.isLoading ? null : () => _checkResult(context, puzzle),
           icon: resultAsync.isLoading
@@ -691,11 +841,11 @@ class _ColorWaveScreenState extends ConsumerState<ColorWaveScreen> with TickerPr
                   ),
                 )
               : const Icon(Icons.check),
-          label: const Text('Check Waves'),
+          label: const Text('Check Match'),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.teal.shade700,
             foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
             ),
@@ -715,10 +865,10 @@ class _ColorWaveScreenState extends ConsumerState<ColorWaveScreen> with TickerPr
             width: MediaQuery.of(context).size.width * 0.85,
             padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(
-              color: const Color(0xFF0A3138),
+              color: Colors.teal.shade900,
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
-                color: Colors.teal.shade700,
+                color: Colors.teal.shade300,
                 width: 1,
               ),
               boxShadow: [
@@ -735,10 +885,10 @@ class _ColorWaveScreenState extends ConsumerState<ColorWaveScreen> with TickerPr
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.tips_and_updates, color: Colors.teal.shade200),
+                    Icon(Icons.waves, color: Colors.teal.shade200),
                     const SizedBox(width: 10),
                     Text(
-                      'Wave Manipulation Tips',
+                      'Wave Interaction Tips',
                       style: TextStyle(
                         fontSize: 22,
                         fontWeight: FontWeight.bold,
@@ -762,26 +912,26 @@ class _ColorWaveScreenState extends ConsumerState<ColorWaveScreen> with TickerPr
                     children: [
                       _buildHintItem(
                         '1',
-                        'Touch a wave to select it for adjustment',
-                        Icons.touch_app,
+                        'Select a color from the palette at the bottom',
+                        Icons.color_lens,
                       ),
                       const SizedBox(height: 12),
                       _buildHintItem(
                         '2',
-                        'Drag up/down to change amplitude (wave height)',
-                        Icons.swap_vert,
+                        'Tap and drag on the canvas to place wave emitters',
+                        Icons.touch_app,
                       ),
                       const SizedBox(height: 12),
                       _buildHintItem(
                         '3',
-                        'Drag left/right to change frequency (wave density)',
-                        Icons.swap_horiz,
+                        'Waves will interact when they collide, creating new colors',
+                        Icons.waves,
                       ),
                       const SizedBox(height: 12),
                       _buildHintItem(
                         '4',
-                        'Change colors to match the target gradient ends',
-                        Icons.palette,
+                        'Reflective obstacles bounce waves, absorptive ones change them',
+                        Icons.blur_circular,
                       ),
                     ],
                   ),
@@ -791,7 +941,7 @@ class _ColorWaveScreenState extends ConsumerState<ColorWaveScreen> with TickerPr
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     const Text(
-                      'Target Gradient:',
+                      'Target Color:',
                       style: TextStyle(
                         color: Colors.white70,
                         fontSize: 16,
@@ -799,15 +949,19 @@ class _ColorWaveScreenState extends ConsumerState<ColorWaveScreen> with TickerPr
                     ),
                     const SizedBox(width: 12),
                     Container(
-                      width: 100,
-                      height: 20,
+                      width: 50,
+                      height: 50,
                       decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [puzzle.availableColors[0], puzzle.targetColor],
-                          begin: Alignment.centerLeft,
-                          end: Alignment.centerRight,
-                        ),
-                        borderRadius: BorderRadius.circular(10),
+                        color: puzzle.targetColor,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                        boxShadow: [
+                          BoxShadow(
+                            color: puzzle.targetColor.withOpacity(0.5),
+                            blurRadius: 8,
+                            spreadRadius: 2,
+                          ),
+                        ],
                       ),
                     ),
                   ],
@@ -872,72 +1026,75 @@ class _ColorWaveScreenState extends ConsumerState<ColorWaveScreen> with TickerPr
       ],
     );
   }
+
+  String _getDifficultyLabel(int level) {
+    if (level <= 3) return 'Beginner';
+    if (level <= 6) return 'Intermediate';
+    if (level <= 9) return 'Advanced';
+    return 'Expert';
+  }
+
+  String _getLevelDescription(int level) {
+    switch (level) {
+      case 1:
+        return 'Create your first wave interference pattern';
+      case 2:
+        return 'Mix primary colors to create secondary colors';
+      case 3:
+        return 'Try adding a reflective obstacle';
+      case 4:
+        return 'Create a complex wave pattern with multiple emitters';
+      case 5:
+        return 'Navigate waves through an obstacle course';
+      case 6:
+        return 'Create harmony with reflection and absorption';
+      case 7:
+        return 'Use color subtraction through absorptive obstacles';
+      case 8:
+        return 'Create a complex harmonic pattern';
+      case 9:
+        return 'Master wave interference in a complex environment';
+      case 10:
+        return 'The ultimate wave challenge';
+      default:
+        return 'Level $level: Mastery challenge';
+    }
+  }
+
+  Color _getMatchColor(Color userColor, Color targetColor, double threshold) {
+    final similarity = _calculateColorSimilarity(userColor, targetColor);
+    if (similarity >= threshold) {
+      return Colors.green;
+    } else if (similarity >= threshold * 0.8) {
+      return Colors.orange;
+    }
+    return Colors.red;
+  }
+
+  double _calculateColorSimilarity(Color a, Color b) {
+    // Calculate color similarity (normalized between 0 and 1)
+    final dr = (a.red - b.red) / 255.0;
+    final dg = (a.green - b.green) / 255.0;
+    final db = (a.blue - b.blue) / 255.0;
+
+    // Human eyes are more sensitive to green, less to blue
+    final distance = (dr * dr * 0.3 + dg * dg * 0.59 + db * db * 0.11);
+
+    return (1.0 - sqrt(distance)).clamp(0.0, 1.0);
+  }
 }
 
-// Helper class for background waves
-class _BackgroundWave {
+// Helper class for background particles
+class _BackgroundParticle {
+  Offset position;
+  final Offset velocity;
+  final double radius;
   final Color color;
-  final double amplitude;
-  final double frequency;
-  final double speed;
-  final double phase;
 
-  _BackgroundWave({
+  _BackgroundParticle({
+    required this.position,
+    required this.velocity,
+    required this.radius,
     required this.color,
-    required this.amplitude,
-    required this.frequency,
-    required this.speed,
-    required this.phase,
   });
-}
-
-// Painter for background waves
-class _BackgroundWavePainter extends CustomPainter {
-  final List<_BackgroundWave> waves;
-  final double animationValue;
-
-  _BackgroundWavePainter({
-    required this.waves,
-    required this.animationValue,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    for (var wave in waves) {
-      _drawWave(canvas, size, wave);
-    }
-  }
-
-  void _drawWave(Canvas canvas, Size size, _BackgroundWave wave) {
-    final width = size.width;
-    final height = size.height;
-    final centerY = height * 0.5;
-
-    // Create wave path
-    final path = Path();
-    path.moveTo(0, centerY);
-
-    for (int x = 0; x <= width; x++) {
-      final wavePhase = wave.phase + (animationValue * wave.speed * 10);
-      final y = centerY + sin((x / width * wave.frequency * 2 * pi) + wavePhase) * wave.amplitude;
-      path.lineTo(x.toDouble(), y);
-    }
-
-    // Complete the path
-    path.lineTo(width, height);
-    path.lineTo(0, height);
-    path.close();
-
-    // Draw the wave
-    final paint = Paint()
-      ..color = wave.color
-      ..style = PaintingStyle.fill;
-
-    canvas.drawPath(path, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant _BackgroundWavePainter oldDelegate) {
-    return oldDelegate.animationValue != animationValue;
-  }
 }

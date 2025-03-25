@@ -1,387 +1,431 @@
 import 'dart:math';
-import 'dart:async';
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:forge2d/forge2d.dart' hide Transform;
+import 'package:flutter/services.dart';
+import 'package:palette_master/core/color_mixing_level_generator.dart';
 import 'package:palette_master/core/color_models/color_mixer.dart';
-import 'package:palette_master/features/puzzles/models/puzzle.dart';
-import 'package:palette_master/features/puzzles/widgets/color_preview.dart';
 import 'package:vibration/vibration.dart';
 
-class ColorRacerGame extends ConsumerStatefulWidget {
-  final Puzzle puzzle;
-  final Color userColor;
+// Main game componentß
+class ColorRacerGame extends StatefulWidget {
+  final Color targetColor;
+  final List<Color> availableColors;
   final Function(Color) onColorMixed;
+  final int level;
+  final Function() onSuccess;
+  final Function() onFailure;
 
   const ColorRacerGame({
     super.key,
-    required this.puzzle,
-    required this.userColor,
+    required this.targetColor,
+    required this.availableColors,
     required this.onColorMixed,
+    required this.level,
+    required this.onSuccess,
+    required this.onFailure,
   });
 
   @override
-  ConsumerState<ColorRacerGame> createState() => _ColorRacerGameState();
+  State<ColorRacerGame> createState() => _ColorRacerGameState();
 }
 
-class _ColorRacerGameState extends ConsumerState<ColorRacerGame> with TickerProviderStateMixin {
+class _ColorRacerGameState extends State<ColorRacerGame> with TickerProviderStateMixin {
+  // Game state
+  bool _gameStarted = false;
+  bool _gameOver = false;
+  bool _isPaused = false;
+  bool _success = false;
+  double _similarity = 0.0;
+  int _score = 0;
+  int _collectedColors = 0;
+  int _secondsLeft = 60;
+  String _statusMessage = "Ready to race!";
+  Color _carColor = Colors.white;
+
+  // Physics
+  late RacerPhysicsWorld _physicsWorld;
+  bool _isAccelerating = false;
+  bool _isBraking = false;
+  bool _isTurningLeft = false;
+  bool _isTurningRight = false;
+
   // Animation controllers
   late AnimationController _gameLoopController;
-  late AnimationController _introAnimationController;
-  late Animation<double> _introAnimation;
+  late AnimationController _countdownController;
+  late AnimationController _powerupAnimationController;
+  late Animation<double> _powerupAnimation;
 
-  // Game state
-  final _random = Random();
-  List<ColorGate> _gates = [];
-  List<PowerUp> _powerUps = [];
-  List<ColorSwatch> _swatches = [];
-  List<Color> _selectedColors = [];
+  // Game elements
+  late RaceCar _car;
+  final List<ColorPickup> _colorPickups = [];
+  final List<Obstacle> _obstacles = [];
+  final List<TrackSection> _trackSections = [];
+  final List<ColorSplash> _splashes = [];
 
-  // Player state
-  late Racer _racer;
-  double _score = 0;
-  double _timeRemaining = 60.0;
-  bool _gameOver = false;
-  bool _gameStarted = false;
-  bool _countdownActive = false;
-  int _countdownValue = 3;
-  int _gatesPassed = 0;
+  // Level configuration
+  late TrackConfig _trackConfig;
 
-  // Track parameters
-  late Size _trackSize;
-  late double _trackLength;
-  double _trackScrollPosition = 0;
-  double _scrollSpeed = 2.0;
+  // Touch controls
+  Offset? _leftJoystickPosition;
+  Offset? _leftJoystickDragPosition;
+  Offset? _rightJoystickPosition;
+  Offset? _rightJoystickDragPosition;
 
-  // Colors and mixing
-  Color _racerColor = Colors.white;
-  double _similarity = 0.0;
-  double _maxSimilarityAchieved = 0.0;
-  double _colorMixTimeout = 0;
-
-  // Touch handling
-  Offset? _lastDragPosition;
-
-  // Tutorial state
-  bool _showTutorial = true;
-  int _tutorialStep = 0;
-  String _statusMessage = '';
-  Color _statusColor = Colors.white;
+  // Timer
+  late AnimationController _timerController;
 
   @override
   void initState() {
     super.initState();
 
-    // Setup animation controllers
+    // Create physics world
+    _physicsWorld = RacerPhysicsWorld();
+
+    // Initialize track configuration based on level
+    _trackConfig = TrackConfig.fromLevel(widget.level);
+
+    // Set up game loop controller
     _gameLoopController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 1),
-    )..addListener(_gameLoop);
+    )..repeat();
 
-    _introAnimationController = AnimationController(
+    _gameLoopController.addListener(_gameLoop);
+
+    // Set up countdown animation
+    _countdownController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1500),
+      duration: const Duration(seconds: 3),
     );
 
-    _introAnimation = CurvedAnimation(
-      parent: _introAnimationController,
-      curve: Curves.easeOutBack,
+    // Set up powerup animation
+    _powerupAnimationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
     );
 
-    // Initialize game
-    _initializeGame();
+    _powerupAnimation = CurvedAnimation(
+      parent: _powerupAnimationController,
+      curve: Curves.elasticOut,
+    );
 
-    // Start intro animation
-    _introAnimationController.forward();
+    // Set up timer
+    _timerController = AnimationController(
+      vsync: this,
+      duration: Duration(seconds: _secondsLeft),
+    );
 
-    // Delayed start to allow player to get ready
-    Future.delayed(const Duration(milliseconds: 1500), () {
-      if (mounted) {
+    _timerController.addListener(() {
+      if (_timerController.isAnimating) {
         setState(() {
-          _countdownActive = true;
+          _secondsLeft = (_secondsLeft - _timerController.value).ceil();
+          if (_secondsLeft <= 0) {
+            _endGame(false);
+          }
         });
-
-        _startCountdown();
       }
     });
+
+    // Initialize track and game elements
+    _initializeGame();
+
+    // Setup joystick positions
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _setupJoystickPositions();
+    });
+  }
+
+  @override
+  void dispose() {
+    _gameLoopController.removeListener(_gameLoop);
+    _gameLoopController.dispose();
+    _countdownController.dispose();
+    _powerupAnimationController.dispose();
+    _timerController.dispose();
+    super.dispose();
+  }
+
+  void _setupJoystickPositions() {
+    final size = MediaQuery.of(context).size;
+
+    // Set left joystick at bottom left
+    _leftJoystickPosition = Offset(size.width * 0.15, size.height * 0.8);
+
+    // Set right joystick at bottom right
+    _rightJoystickPosition = Offset(size.width * 0.85, size.height * 0.8);
   }
 
   void _initializeGame() {
-    // Calculate track size based on screen dimensions (will be updated in build)
-    _trackSize = Size(300, 500);
-    _trackLength = 5000; // Total length of the track
-
-    // Initialize racer
-    _racer = Racer(
-      position: Offset(_trackSize.width / 2, _trackSize.height * 0.75),
-      size: const Size(50, 80),
+    // Create car
+    _car = RaceCar(
+      position: _trackConfig.startPosition,
+      size: const Size(40, 70),
       color: Colors.white,
+      angle: _trackConfig.startAngle,
     );
 
-    // Create initial gates
-    _createInitialGates();
+    // Add car to physics world
+    _physicsWorld.addCar(_car);
 
-    // Create color swatches from available colors
-    _createColorSwatches();
+    // Create track sections
+    _createTrack();
 
-    // Set initial user color
-    _racerColor = Colors.white;
+    // Add track boundaries to physics world
+    for (final section in _trackSections) {
+      _physicsWorld.addTrackBounds(section);
+    }
 
+    // Create color pickups
+    _createColorPickups();
+
+    // Create obstacles
+    _createObstacles();
+
+    // Set initial car color
+    _carColor = Colors.white;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      widget.onColorMixed(_racerColor);
+      widget.onColorMixed(_carColor);
     });
   }
 
-  void _createInitialGates() {
-    _gates = [];
+  void _createTrack() {
+    _trackSections.clear();
 
-    // Distance between gates increases with level difficulty
-    double gateSpacing = 250 - (widget.puzzle.level * 5).clamp(0, 150).toDouble();
-    double minGateWidth = 100 - (widget.puzzle.level * 2).clamp(0, 50).toDouble();
-
-    // Create gates along the track
-    for (int i = 0; i < 20; i++) {
-      final gatePosition = 300.0 + (i * gateSpacing);
-      final gateWidth = minGateWidth + _random.nextDouble() * 80;
-
-      // Choose a color for the gate
-      // Lower levels use primary or secondary colors, higher levels use more complex mixes
-      Color gateColor;
-
-      if (widget.puzzle.level <= 3 || i < 2) {
-        // Simple colors for early gates or lower levels
-        gateColor = widget.puzzle.availableColors[_random.nextInt(widget.puzzle.availableColors.length)];
-      } else {
-        // Mix colors for more complex gates
-        final colorCount = 2 + (_random.nextInt(widget.puzzle.level ~/ 3).clamp(0, 2));
-        List<Color> mixColors = [];
-
-        for (int c = 0; c < colorCount; c++) {
-          mixColors.add(widget.puzzle.availableColors[_random.nextInt(widget.puzzle.availableColors.length)]);
-        }
-
-        gateColor = ColorMixer.mixSubtractive(mixColors);
-      }
-
-      final gate = ColorGate(
-        position: Offset((_trackSize.width - gateWidth) / 2, gatePosition),
-        size: Size(gateWidth, 20),
-        color: gateColor,
+    // Create track based on configuration
+    for (final sectionConfig in _trackConfig.trackSections) {
+      _trackSections.add(
+        TrackSection(
+          rect: sectionConfig.rect,
+          trackWidth: sectionConfig.width,
+          cornerRadius: sectionConfig.cornerRadius,
+          rotation: sectionConfig.rotation,
+          type: sectionConfig.type,
+        ),
       );
-
-      _gates.add(gate);
     }
 
-    // Add some power-ups
-    _powerUps = [];
-
-    for (int i = 0; i < 10; i++) {
-      final yPos = 600.0 + (i * gateSpacing * 1.5);
-      final xPos = 50 + _random.nextDouble() * (_trackSize.width - 100);
-
-      PowerUpType type;
-      if (_random.nextDouble() > 0.7) {
-        type = PowerUpType.timeBonus;
-      } else if (_random.nextDouble() > 0.5) {
-        type = PowerUpType.speedBoost;
-      } else {
-        type = PowerUpType.colorHint;
-      }
-
-      final powerUp = PowerUp(
-        position: Offset(xPos, yPos),
-        type: type,
+    // Add checkpoints
+    for (final checkpoint in _trackConfig.checkpoints) {
+      _trackSections.add(
+        TrackSection(
+          rect: checkpoint.rect,
+          trackWidth: 10,
+          cornerRadius: 0,
+          rotation: checkpoint.rotation,
+          type: TrackSectionType.checkpoint,
+        ),
       );
-
-      _powerUps.add(powerUp);
     }
+
+    // Add finish line
+    _trackSections.add(
+      TrackSection(
+        rect: _trackConfig.finishLine,
+        trackWidth: 10,
+        cornerRadius: 0,
+        rotation: 0,
+        type: TrackSectionType.finishLine,
+      ),
+    );
   }
 
-  void _createColorSwatches() {
-    _swatches = [];
+  void _createColorPickups() {
+    _colorPickups.clear();
 
-    // Create a swatch for each available color
-    for (final color in widget.puzzle.availableColors) {
-      _swatches.add(
-        ColorSwatch(
-          color: color,
-          isSelected: false,
+    // Add color pickups of available colors
+    for (int i = 0; i < widget.availableColors.length; i++) {
+      // Calculate pickup position along the track
+      final trackProgress = (i + 1) / (widget.availableColors.length + 1);
+      final sectionIndex =
+          ((trackProgress * _trackConfig.trackSections.length) % _trackConfig.trackSections.length).floor();
+      final section = _trackConfig.trackSections[sectionIndex];
+
+      // Position within section
+      final positionAlongSection = Random().nextDouble();
+      final offset = _getOffsetAlongTrack(section, positionAlongSection);
+
+      // Create pickup
+      _colorPickups.add(
+        ColorPickup(
+          position: offset,
+          color: widget.availableColors[i],
+          radius: 20,
+        ),
+      );
+    }
+
+    // Add bonus color pickups
+    final bonusColors = [
+      Colors.white,
+      Colors.black,
+      ...widget.availableColors,
+    ];
+
+    for (int i = 0; i < 5; i++) {
+      final randomSectionIndex = Random().nextInt(_trackConfig.trackSections.length);
+      final section = _trackConfig.trackSections[randomSectionIndex];
+      final positionAlongSection = Random().nextDouble();
+      final offset = _getOffsetAlongTrack(section, positionAlongSection);
+
+      // Create pickup
+      _colorPickups.add(
+        ColorPickup(
+          position: offset,
+          color: bonusColors[Random().nextInt(bonusColors.length)],
+          radius: 15,
         ),
       );
     }
   }
 
-  void _startCountdown() {
-    // Countdown timer before starting game
-    Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (mounted) {
-        setState(() {
-          _countdownValue--;
-        });
+  Offset _getOffsetAlongTrack(TrackSectionConfig section, double progress) {
+    switch (section.type) {
+      case TrackSectionType.straight:
+        // Linear interpolation along straight section
+        final start = section.rect.topLeft;
+        final end = section.rect.bottomRight;
+        return Offset(
+          start.dx + (end.dx - start.dx) * progress,
+          start.dy + (end.dy - start.dy) * progress,
+        );
 
-        // Provide feedback
+      case TrackSectionType.curve:
+        // Calculate position along curve
+        final center = section.rect.center;
+        final radius = section.width / 2;
+        final angle = section.rotation + (progress * pi / 2);
+        return Offset(
+          center.dx + cos(angle) * radius,
+          center.dy + sin(angle) * radius,
+        );
+
+      default:
+        // Default position at center of section
+        return section.rect.center;
+    }
+  }
+
+  void _createObstacles() {
+    _obstacles.clear();
+
+    // Create obstacles based on level configuration
+    for (final obstacleConfig in _trackConfig.obstacles) {
+      _obstacles.add(
+        Obstacle(
+          position: obstacleConfig.position,
+          size: obstacleConfig.size,
+          type: obstacleConfig.type,
+          rotation: obstacleConfig.rotation,
+        ),
+      );
+
+      // Add to physics world
+      _physicsWorld.addObstacle(_obstacles.last);
+    }
+  }
+
+  void _gameLoop() {
+    if (!_gameStarted || _gameOver || _isPaused) return;
+
+    // Update physics (apply car controls)
+    if (_isAccelerating) {
+      _car.accelerate();
+    }
+
+    if (_isBraking) {
+      _car.brake();
+    }
+
+    if (_isTurningLeft) {
+      _car.turnLeft();
+    }
+
+    if (_isTurningRight) {
+      _car.turnRight();
+    }
+
+    // Step physics simulation
+    _physicsWorld.step();
+
+    // Update car position from physics
+    _car.updateFromPhysics();
+
+    // Check for collisions with color pickups
+    _checkColorPickupCollisions();
+
+    // Check for collisions with track boundaries
+    _checkTrackBoundaryCollisions();
+
+    // Check for level completion
+    _checkLevelCompletion();
+
+    // Update visual effects
+    _updateSplashes();
+
+    // Force rebuild to reflect updated positions
+    setState(() {});
+  }
+
+  void _checkColorPickupCollisions() {
+    // Check each color pickup
+    for (int i = _colorPickups.length - 1; i >= 0; i--) {
+      final pickup = _colorPickups[i];
+
+      // Calculate distance to car
+      final distance = (pickup.position - _car.position).distance;
+
+      // If car collides with pickup
+      if (distance < pickup.radius + 20) {
+        // Mix colors
+        _mixNewColor(pickup.color);
+
+        // Create splash effect
+        _createColorSplash(pickup.position, pickup.color);
+
+        // Remove pickup
+        _colorPickups.removeAt(i);
+
+        // Update score
+        _score += 10;
+        _collectedColors++;
+
+        // Provide haptic feedback
         Vibration.hasVibrator().then((hasVibrator) {
           if (hasVibrator ?? false) {
             Vibration.vibrate(duration: 50, amplitude: 100);
           }
         });
 
-        if (_countdownValue <= 0) {
-          timer.cancel();
-          _startGame();
-        }
-      } else {
-        timer.cancel();
+        // Play pickup animation
+        _powerupAnimationController.reset();
+        _powerupAnimationController.forward();
       }
-    });
+    }
   }
 
-  void _startGame() {
+  void _mixNewColor(Color newColor) {
+    // Mix current car color with new pickup color
+    final mixedColor = ColorMixer.mixSubtractive([_carColor, newColor]);
+
     setState(() {
-      _gameStarted = true;
-      _countdownActive = false;
+      _carColor = mixedColor;
+      _car.color = mixedColor;
     });
 
-    // Start game loop
-    _gameLoopController.repeat();
+    // Update parent
+    widget.onColorMixed(_carColor);
 
-    // Show first tutorial message if needed
-    if (_showTutorial) {
-      _showStatusMessage('Mix colors to match the gates!', Colors.white);
-
-      Future.delayed(const Duration(seconds: 3), () {
-        if (mounted && _showTutorial) {
-          _showStatusMessage('Drag left & right to steer', Colors.white);
-          setState(() {
-            _tutorialStep = 1;
-          });
-        }
-      });
-    }
+    // Calculate similarity to target
+    _calculateSimilarity();
   }
 
-  void _gameLoop() {
-    if (!_gameStarted || _gameOver) return;
-
-    // Update time
-    setState(() {
-      _timeRemaining -= 0.016; // Roughly 60fps
-
-      if (_timeRemaining <= 0) {
-        _endGame();
-      }
-    });
-
-    // // Move track (scroll gates and power-ups)
-    _updateTrackPosition();
-
-    // // Check collisions with gates and power-ups
-    _checkCollisions();
-
-    // // Update color mix timeout
-    if (_colorMixTimeout > 0) {
-      setState(() {
-        _colorMixTimeout -= 0.016;
-      });
-    }
-  }
-
-  void _updateTrackPosition() {
-    // Scroll the track based on speed
-    setState(() {
-      _trackScrollPosition += _scrollSpeed;
-
-      // Move racer slightly forward if not at position
-      if (_racer.position.dy > _trackSize.height * 0.75) {
-        _racer.position = Offset(_racer.position.dx, _racer.position.dy - 1);
-      } else if (_racer.position.dy < _trackSize.height * 0.75) {
-        _racer.position = Offset(_racer.position.dx, _racer.position.dy + 1);
-      }
-    });
-  }
-
-  void _checkCollisions() {
-    // Check gates
-    for (final gate in _gates) {
-      // Adjust gate position for scrolling
-      final gateY = gate.position.dy - _trackScrollPosition;
-
-      // Check if racer is passing through the gate
-      if (gateY >= _racer.position.dy - _racer.size.height / 2 && gateY <= _racer.position.dy && !gate.passed) {
-        // Check if racer is within gate horizontally
-        final racerLeft = _racer.position.dx - _racer.size.width / 2;
-        final racerRight = _racer.position.dx + _racer.size.width / 2;
-        final gateLeft = gate.position.dx;
-        final gateRight = gate.position.dx + gate.size.width;
-
-        if (racerRight >= gateLeft && racerLeft <= gateRight) {
-          // Calculate color similarity
-          final similarity = _calculateColorSimilarity(_racerColor, gate.color);
-
-          // Record highest similarity achieved
-          if (similarity > _maxSimilarityAchieved) {
-            _maxSimilarityAchieved = similarity;
-          }
-
-          // // Gate passed, check color match
-          if (similarity >= widget.puzzle.accuracyThreshold) {
-            // Successful match
-            _handleGateSuccess(gate, similarity);
-          } else {
-            // Failed match
-            _handleGateFailure(gate, similarity);
-          }
-
-          //  Mark gate as passed
-          // WidgetsBinding.instance.addPostFrameCallback((_) {
-          //   setState(() {
-          //     gate.passed = true;
-          //     _gatesPassed++;
-          //   });
-          // });
-          // setState(() {
-          //   gate.passed = true;
-          //   _gatesPassed++;
-          // });
-
-          // // Update color for puzzle completion
-          widget.onColorMixed(gate.color);
-
-          // // Show tutorial message if needed
-          if (_showTutorial && _tutorialStep == 1) {
-            setState(() {
-              _tutorialStep = 2;
-            });
-            _showStatusMessage('Use color swatches to mix colors', Colors.white);
-          }
-        }
-      }
-    }
-
-    // Check power-ups
-    for (final powerUp in List<PowerUp>.from(_powerUps)) {
-      if (powerUp.collected) continue;
-
-      // Adjust power-up position for scrolling
-      final powerUpY = powerUp.position.dy - _trackScrollPosition;
-
-      // Check if racer is collecting the power-up
-      if ((powerUpY - _racer.position.dy).abs() < 40 && (powerUp.position.dx - _racer.position.dx).abs() < 40) {
-        // Collect power-up
-        setState(() {
-          powerUp.collected = true;
-        });
-
-        // Apply power-up effect
-        _applyPowerUp(powerUp);
-      }
-    }
-  }
-
-  double _calculateColorSimilarity(Color a, Color b) {
-    // Calculate color similarity (normalized between 0 and 1)
-    final dr = (a.red - b.red) / 255.0;
-    final dg = (a.green - b.green) / 255.0;
-    final db = (a.blue - b.blue) / 255.0;
+  void _calculateSimilarity() {
+    // Calculate similarity between current car color and target color
+    final dr = (_carColor.red - widget.targetColor.red) / 255.0;
+    final dg = (_carColor.green - widget.targetColor.green) / 255.0;
+    final db = (_carColor.blue - widget.targetColor.blue) / 255.0;
 
     // Human eyes are more sensitive to green, less to blue
     final distance = (dr * dr * 0.3 + dg * dg * 0.59 + db * db * 0.11);
@@ -391,410 +435,430 @@ class _ColorRacerGameState extends ConsumerState<ColorRacerGame> with TickerProv
       _similarity = similarity;
     });
 
-    return similarity;
-  }
-
-  void _handleGateSuccess(ColorGate gate, double similarity) {
-    // Calculate points based on similarity
-    final basePoints = 100.0 * similarity;
-    final timeBonus = (_timeRemaining / 10.0).clamp(1.0, 6.0);
-    final totalPoints = basePoints * timeBonus;
-
-    setState(() {
-      _score += totalPoints.roundToDouble();
-      _scrollSpeed += 0.1; // Speed up a bit for each successful gate
-      _scrollSpeed = _scrollSpeed.clamp(1.0, 8.0); // Cap max speed
-    });
-
-    // Show success message
-    _showStatusMessage('Perfect Match! +${totalPoints.round()}', Colors.green);
-
-    // Provide haptic feedback
-    Vibration.hasVibrator().then((hasVibrator) {
-      if (hasVibrator ?? false) {
-        Vibration.vibrate(duration: 100, amplitude: 150);
-      }
-    });
-  }
-
-  void _handleGateFailure(ColorGate gate, double similarity) {
-    // Calculate penalty based on how far off the match was
-    final penalty = 5.0 * (1.0 - similarity);
-
-    setState(() {
-      _timeRemaining -= penalty;
-      _scrollSpeed *= 0.8; // Slow down a bit
-      _scrollSpeed = _scrollSpeed.clamp(1.0, 8.0);
-    });
-
-    // Show failure message
-    _showStatusMessage('Wrong Color! -${penalty.round()}s', Colors.red);
-
-    // Provide haptic feedback
-    Vibration.hasVibrator().then((hasVibrator) {
-      if (hasVibrator ?? false) {
-        Vibration.vibrate(duration: 200, amplitude: 100);
-      }
-    });
-  }
-
-  void _applyPowerUp(PowerUp powerUp) {
-    switch (powerUp.type) {
-      case PowerUpType.timeBonus:
-        setState(() {
-          _timeRemaining += 5.0;
-        });
-        _showStatusMessage('+5 Seconds!', Colors.blue);
-        break;
-
-      case PowerUpType.speedBoost:
-        setState(() {
-          _scrollSpeed *= 1.5;
-        });
-        _showStatusMessage('Speed Boost!', Colors.orange);
-
-        // Reset speed after 3 seconds
-        Future.delayed(const Duration(seconds: 3), () {
-          if (mounted && _gameStarted && !_gameOver) {
-            setState(() {
-              _scrollSpeed /= 1.5;
-            });
-          }
-        });
-        break;
-
-      case PowerUpType.colorHint:
-        // Find the next gate that hasn't been passed
-        ColorGate? nextGate;
-        for (final gate in _gates) {
-          if (!gate.passed) {
-            nextGate = gate;
-            break;
-          }
-        }
-
-        if (nextGate != null) {
-          _showStatusMessage('Next Gate: Match this color!', nextGate.color);
-
-          // Temporarily show the gate's color on the racer
-          setState(() {
-            _racer.hintColor = nextGate?.color;
-          });
-
-          // Reset hint after 2 seconds
-          Future.delayed(const Duration(seconds: 2), () {
-            if (mounted) {
-              setState(() {
-                _racer.hintColor = null;
-              });
-            }
-          });
-        }
-        break;
+    // Update status message based on similarity
+    if (_similarity > 0.95) {
+      _statusMessage = "Perfect match! Find the finish line!";
+    } else if (_similarity > 0.85) {
+      _statusMessage = "Very close! Just needs a little adjusting...";
+    } else if (_similarity > 0.7) {
+      _statusMessage = "Getting closer to the target color!";
+    } else if (_similarity > 0.5) {
+      _statusMessage = "Making progress, but need more colors...";
+    } else {
+      _statusMessage = "Keep collecting colors to match the target!";
     }
-
-    // Provide haptic feedback
-    Vibration.hasVibrator().then((hasVibrator) {
-      if (hasVibrator ?? false) {
-        Vibration.vibrate(duration: 50, amplitude: 150);
-      }
-    });
   }
 
-  void _showStatusMessage(String message, Color color) {
-    setState(() {
-      _statusMessage = message;
-      _statusColor = color;
-    });
+  void _checkTrackBoundaryCollisions() {
+    // If car goes off track, apply penalty
+    if (_physicsWorld.isCarOffTrack()) {
+      // Slow down car
+      _car.applyBrake(0.95);
 
-    // Clear message after a delay
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted && _statusMessage == message) {
-        setState(() {
-          _statusMessage = '';
-        });
-      }
-    });
+      // Update status message
+      _statusMessage = "Off track! Slow down!";
+    }
   }
 
-  void _handleColorSwatchTap(ColorSwatch swatch) {
-    if (_colorMixTimeout > 0) return; // Prevent rapid mixing
-
-    setState(() {
-      // Toggle selection
-      swatch.isSelected = !swatch.isSelected;
-
-      // Update selected colors
-      if (swatch.isSelected) {
-        _selectedColors.add(swatch.color);
+  void _checkLevelCompletion() {
+    // Check if car has crossed finish line
+    if (_physicsWorld.hasCarCrossedFinishLine()) {
+      // If color similarity is high enough, level completed
+      if (_similarity >= 0.85) {
+        _endGame(true);
       } else {
-        _selectedColors.remove(swatch.color);
+        // Otherwise, show message that color isn't matching yet
+        _statusMessage = "Color doesn't match target yet! (${(_similarity * 100).toInt()}%)";
       }
-
-      // Mix colors
-      if (_selectedColors.isEmpty) {
-        _racerColor = Colors.white;
-      } else if (_selectedColors.length == 1) {
-        _racerColor = _selectedColors.first;
-      } else {
-        _racerColor = ColorMixer.mixSubtractive(_selectedColors);
-      }
-
-      // Update racer color
-      _racer.color = _racerColor;
-
-      // Set cooldown for color mixing (prevents rapid changes)
-      _colorMixTimeout = 0.2;
-    });
-
-    // Update widget color
-    widget.onColorMixed(_racerColor);
-
-    // Provide haptic feedback
-    Vibration.hasVibrator().then((hasVibrator) {
-      if (hasVibrator ?? false) {
-        Vibration.vibrate(duration: 20, amplitude: 40);
-      }
-    });
+    }
   }
 
-  void _handleRacerDrag(DragUpdateDetails details) {
-    if (!_gameStarted || _gameOver) return;
-
-    setState(() {
-      // Move racer horizontally
-      _racer.position = Offset(
-        (_racer.position.dx + details.delta.dx).clamp(
-          _racer.size.width / 2,
-          _trackSize.width - _racer.size.width / 2,
-        ),
-        _racer.position.dy,
-      );
-
-      // Store last drag position for inertia
-      _lastDragPosition = details.globalPosition;
-    });
-  }
-
-  void _handleRacerDragEnd(DragEndDetails details) {
-    // Apply slight inertia
-    _lastDragPosition = null;
-  }
-
-  void _endGame() {
-    if (_gameOver) return;
-
-    // Stop game loop
-    _gameLoopController.stop();
-
-    setState(() {
-      _gameOver = true;
-      _gameStarted = false;
-      _timeRemaining = 0;
-    });
-
-    // Update similarity for puzzle completion based on max achieved
-    _calculateColorSimilarity(
-      widget.puzzle.targetColor,
-      Color.lerp(Colors.white, widget.puzzle.targetColor, _maxSimilarityAchieved) ?? Colors.white,
-    );
-
-    // Show game over dialog after a short delay
-    Future.delayed(const Duration(milliseconds: 500), () {
-      _showGameOverDialog();
-    });
-  }
-
-  void _showGameOverDialog() {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: const Text('Race Complete!'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Score: ${_score.round()}'),
-            const SizedBox(height: 8),
-            Text('Gates Passed: $_gatesPassed'),
-            const SizedBox(height: 8),
-            Text(
-              'Best Color Match: ${(_maxSimilarityAchieved * 100).round()}%',
-              style: TextStyle(
-                color: _getSimilarityColor(_maxSimilarityAchieved),
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'You\'ve learned how to quickly mix colors to match targets - a valuable color theory skill!',
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              _restartGame();
-            },
-            child: const Text('Play Again'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-            },
-            child: const Text('Continue'),
-          ),
-        ],
+  void _createColorSplash(Offset position, Color color) {
+    // Create color splash effect
+    _splashes.add(
+      ColorSplash(
+        position: position,
+        color: color,
+        size: 30.0,
+        opacity: 1.0,
       ),
     );
   }
 
-  void _restartGame() {
-    setState(() {
-      // Reset game state
-      _score = 0;
-      _timeRemaining = 60.0;
-      _gameOver = false;
-      _trackScrollPosition = 0;
-      _scrollSpeed = 2.0;
-      _gatesPassed = 0;
-      _maxSimilarityAchieved = 0.0;
-      _showTutorial = false;
+  void _updateSplashes() {
+    // Update and fade out splashes
+    for (int i = _splashes.length - 1; i >= 0; i--) {
+      final splash = _splashes[i];
 
-      // Reinitialize game components
-      _initializeGame();
+      // Increase size and reduce opacity
+      splash.size += 2.0;
+      splash.opacity -= 0.05;
 
-      // Start countdown
-      _countdownActive = true;
-      _countdownValue = 3;
-    });
-
-    _startCountdown();
+      // Remove if fully transparent
+      if (splash.opacity <= 0) {
+        _splashes.removeAt(i);
+      }
+    }
   }
 
-  @override
-  void dispose() {
-    _gameLoopController.dispose();
-    _introAnimationController.dispose();
-    super.dispose();
+  void _startGame() {
+    setState(() {
+      _gameStarted = true;
+      _gameOver = false;
+      _isPaused = false;
+    });
+
+    // Start countdown
+    _countdownController.forward().then((_) {
+      // Start timer after countdown
+      _timerController.forward();
+    });
+  }
+
+  void _endGame(bool success) {
+    setState(() {
+      _gameOver = true;
+      _success = success;
+      _timerController.stop();
+    });
+
+    // Call appropriate callback
+    if (success) {
+      widget.onSuccess();
+    } else {
+      widget.onFailure();
+    }
+  }
+
+  void _pauseGame() {
+    setState(() {
+      _isPaused = true;
+      _timerController.stop();
+    });
+  }
+
+  void _resumeGame() {
+    setState(() {
+      _isPaused = false;
+      _timerController.forward();
+    });
+  }
+
+  void _restartGame() {
+    // Reset game state
+    setState(() {
+      _gameStarted = false;
+      _gameOver = false;
+      _isPaused = false;
+      _score = 0;
+      _collectedColors = 0;
+      _secondsLeft = 60;
+      _carColor = Colors.white;
+      _similarity = 0.0;
+      _statusMessage = "Ready to race!";
+
+      // Reset animations
+      _countdownController.reset();
+      _timerController.reset();
+
+      // Clear effects
+      _splashes.clear();
+    });
+
+    // Re-initialize game elements
+    _initializeGame();
   }
 
   @override
   Widget build(BuildContext context) {
-    // Update track size based on actual screen size
-    final screenSize = MediaQuery.of(context).size;
-    _trackSize = Size(screenSize.width - 32, screenSize.height * 0.6);
+    return GestureDetector(
+      onPanStart: _handlePanStart,
+      onPanUpdate: _handlePanUpdate,
+      onPanEnd: _handlePanEnd,
+      child: Container(
+        width: double.infinity,
+        height: double.infinity,
+        color: Colors.grey[800],
+        child: Stack(
+          children: [
+            // Track and game elements
+            _buildGameView(),
 
-    return AnimatedBuilder(
-      animation: _introAnimation,
-      builder: (context, child) {
-        return Transform.scale(
-          scale: _introAnimation.value,
-          child: Column(
-            children: [
-              // Game status area
-              _buildGameStatusArea(),
+            // Overlay UI
+            _buildUI(),
 
-              const SizedBox(height: 8),
-
-              // Race track area
-              Expanded(
-                child: _buildRaceTrack(),
-              ),
-
-              const SizedBox(height: 8),
-
-              // Color mixing controls
-              _buildColorControls(),
+            // Joystick controls
+            if (_gameStarted && !_gameOver) ...[
+              _buildLeftJoystick(),
+              _buildRightJoystick(),
             ],
-          ),
-        );
-      },
+
+            // Countdown overlay
+            if (_gameStarted && _countdownController.isAnimating) _buildCountdown(),
+
+            // Game over overlay
+            if (_gameOver) _buildGameOverOverlay(),
+
+            // Pause overlay
+            if (_isPaused) _buildPauseOverlay(),
+
+            // Start screen
+            if (!_gameStarted && !_gameOver) _buildStartScreen(),
+          ],
+        ),
+      ),
     );
   }
 
-  Widget _buildGameStatusArea() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
-        borderRadius: BorderRadius.circular(16),
+  Widget _buildGameView() {
+    return CustomPaint(
+      painter: RaceTrackPainter(
+        trackSections: _trackSections,
+        car: _car,
+        colorPickups: _colorPickups,
+        obstacles: _obstacles,
+        splashes: _splashes,
+        similarity: _similarity,
+        targetColor: widget.targetColor,
       ),
+      size: Size.infinite,
+    );
+  }
+
+  Widget _buildUI() {
+    return SafeArea(
       child: Column(
         children: [
-          // Score and time
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              // Score
-              Row(
-                children: [
-                  Icon(
-                    Icons.star,
-                    color: Colors.amber,
-                    size: 24,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Score: ${_score.round()}',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
+          // Top UI bar
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.6),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                // Score counter
+                Row(
+                  children: [
+                    const Icon(Icons.star, color: Colors.amber, size: 20),
+                    const SizedBox(width: 4),
+                    Text(
+                      "Score: $_score",
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                  ),
-                ],
-              ),
-
-              // Gates passed
-              Text(
-                'Gates: $_gatesPassed',
-                style: const TextStyle(
-                  fontSize: 16,
+                  ],
                 ),
-              ),
 
-              // Time remaining
-              Row(
-                children: [
-                  Icon(
-                    Icons.timer,
-                    color: _timeRemaining < 10 ? Colors.red : Colors.blue,
-                    size: 24,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    '${_timeRemaining.toStringAsFixed(1)}s',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                      color: _timeRemaining < 10 ? Colors.red : null,
+                // Timer
+                Row(
+                  children: [
+                    Icon(
+                      Icons.timer,
+                      color: _secondsLeft <= 10 ? Colors.red : Colors.white,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      "${_secondsLeft}s",
+                      style: TextStyle(
+                        color: _secondsLeft <= 10 ? Colors.red : Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+
+                // Color counter
+                Row(
+                  children: [
+                    const Icon(Icons.palette, color: Colors.white, size: 20),
+                    const SizedBox(width: 4),
+                    Text(
+                      "$_collectedColors",
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+
+                // Pause button
+                if (_gameStarted && !_gameOver)
+                  GestureDetector(
+                    onTap: _pauseGame,
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.pause, color: Colors.white, size: 20),
                     ),
                   ),
-                ],
-              ),
-            ],
+              ],
+            ),
           ),
 
-          const SizedBox(height: 8),
+          // Color match indicator
+          if (_gameStarted && !_gameOver)
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: AnimatedBuilder(
+                animation: _powerupAnimationController,
+                builder: (context, child) {
+                  final scale = _powerupAnimationController.isAnimating ? 1.0 + (_powerupAnimation.value * 0.2) : 1.0;
 
-          // Current status message
-          if (_statusMessage.isNotEmpty || _countdownActive)
+                  return Transform.scale(
+                    scale: scale,
+                    child: child,
+                  );
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.6),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: _getSimilarityColor(),
+                      width: 2,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      // Target color
+                      Column(
+                        children: [
+                          const Text(
+                            "Target",
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Container(
+                            width: 40,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              color: widget.targetColor,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.white,
+                                width: 2,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: widget.targetColor.withOpacity(0.5),
+                                  blurRadius: 8,
+                                  spreadRadius: 2,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+
+                      const SizedBox(width: 16),
+
+                      // Similarity meter
+                      Column(
+                        children: [
+                          Text(
+                            "${(_similarity * 100).toInt()}% Match",
+                            style: TextStyle(
+                              color: _getSimilarityColor(),
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            width: 100,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              color: Colors.grey[700],
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 100 * _similarity,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    color: _getSimilarityColor(),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+
+                      const SizedBox(width: 16),
+
+                      // Current car color
+                      Column(
+                        children: [
+                          const Text(
+                            "Your Car",
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Container(
+                            width: 40,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              color: _carColor,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.white,
+                                width: 2,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: _carColor.withOpacity(0.5),
+                                  blurRadius: 8,
+                                  spreadRadius: 2,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+          const Spacer(),
+
+          // Status message
+          if (_gameStarted && !_gameOver)
             Container(
-              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
+              margin: const EdgeInsets.only(bottom: 100),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
               decoration: BoxDecoration(
-                color: _countdownActive ? Colors.blue.withOpacity(0.2) : _statusColor.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(8),
+                color: Colors.black.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(20),
               ),
               child: Text(
-                _countdownActive ? 'Starting in: $_countdownValue' : _statusMessage,
-                style: TextStyle(
+                _statusMessage,
+                style: const TextStyle(
+                  color: Colors.white,
                   fontWeight: FontWeight.bold,
-                  color: _countdownActive ? Colors.blue : _statusColor,
                   fontSize: 16,
                 ),
-                textAlign: TextAlign.center,
               ),
             ),
         ],
@@ -802,621 +866,1660 @@ class _ColorRacerGameState extends ConsumerState<ColorRacerGame> with TickerProv
     );
   }
 
-  Widget _buildRaceTrack() {
-    return Container(
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface.withOpacity(0.7),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      clipBehavior: Clip.antiAlias,
+  Widget _buildLeftJoystick() {
+    if (_leftJoystickPosition == null) return const SizedBox();
+
+    final joystickSize = 120.0;
+    final actualPosition = _leftJoystickDragPosition ?? _leftJoystickPosition!;
+
+    final dragOffset =
+        _leftJoystickDragPosition != null ? (_leftJoystickDragPosition! - _leftJoystickPosition!).distance : 0.0;
+
+    // Normalize drag position within bounds
+    final maxDrag = joystickSize / 4;
+    final dragPercent = dragOffset / maxDrag;
+    final normalizedPercent = dragPercent.clamp(0.0, 1.0);
+
+    // Calculate normalized direction
+    Offset direction = Offset.zero;
+    if (_leftJoystickDragPosition != null) {
+      direction = (_leftJoystickDragPosition! - _leftJoystickPosition!).normalize();
+    }
+
+    // Define whether acceleration or braking
+    _isAccelerating = _leftJoystickDragPosition != null && direction.dy < -0.2;
+    _isBraking = _leftJoystickDragPosition != null && direction.dy > 0.2;
+
+    return Positioned(
+      left: _leftJoystickPosition!.dx - joystickSize / 2,
+      top: _leftJoystickPosition!.dy - joystickSize / 2,
+      width: joystickSize,
+      height: joystickSize,
       child: Stack(
         children: [
-          // Track background
-          CustomPaint(
-            size: _trackSize,
-            painter: TrackPainter(
-              scrollPosition: _trackScrollPosition,
-              trackLength: _trackLength,
+          // Joystick background
+          Container(
+            width: joystickSize,
+            height: joystickSize,
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.5),
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: Colors.white.withOpacity(0.3),
+                width: 2,
+              ),
+            ),
+            child: const Center(
+              child: Icon(
+                Icons.arrow_upward,
+                color: Colors.white,
+                size: 30,
+              ),
             ),
           ),
 
-          // Color gates
-          ..._gates.map((gate) {
-            final gateY = gate.position.dy - _trackScrollPosition;
-
-            // Only show gates within visible area
-            if (gateY < -50 || gateY > _trackSize.height + 50) {
-              return const SizedBox.shrink();
-            }
-
-            return Positioned(
-              left: gate.position.dx,
-              top: gateY,
-              child: Container(
-                width: gate.size.width,
-                height: gate.size.height,
-                decoration: BoxDecoration(
-                  color: gate.color,
-                  borderRadius: BorderRadius.circular(4),
-                  boxShadow: [
-                    BoxShadow(
-                      color: gate.color.withOpacity(0.5),
-                      blurRadius: 8,
-                      spreadRadius: 2,
-                    ),
-                  ],
-                ),
-                child: gate.passed
-                    ? Icon(
-                        gate.passed &&
-                                _calculateColorSimilarity(gate.color, _racerColor) >= widget.puzzle.accuracyThreshold
-                            ? Icons.check
-                            : Icons.close,
-                        color: Colors.white,
-                      )
-                    : null,
-              ),
-            );
-          }),
-
-          // Power-ups
-          ..._powerUps.map((powerUp) {
-            if (powerUp.collected) return const SizedBox.shrink();
-
-            final powerUpY = powerUp.position.dy - _trackScrollPosition;
-
-            // Only show power-ups within visible area
-            if (powerUpY < -50 || powerUpY > _trackSize.height + 50) {
-              return const SizedBox.shrink();
-            }
-
-            return Positioned(
-              left: powerUp.position.dx - 15,
-              top: powerUpY - 15,
-              child: Container(
-                width: 30,
-                height: 30,
-                decoration: BoxDecoration(
-                  color: _getPowerUpColor(powerUp.type),
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: _getPowerUpColor(powerUp.type).withOpacity(0.5),
-                      blurRadius: 8,
-                      spreadRadius: 2,
-                    ),
-                  ],
-                ),
-                child: Icon(
-                  _getPowerUpIcon(powerUp.type),
-                  color: Colors.white,
-                  size: 18,
-                ),
-              ),
-            );
-          }),
-
-          // Player's racer
-          GestureDetector(
-            onHorizontalDragUpdate: _handleRacerDrag,
-            onHorizontalDragEnd: _handleRacerDragEnd,
+          // Joystick handle
+          Positioned(
+            left: joystickSize / 2 - 20 + (direction.dx * maxDrag * normalizedPercent),
+            top: joystickSize / 2 - 20 + (direction.dy * maxDrag * normalizedPercent),
+            width: 40,
+            height: 40,
             child: Container(
-              color: Colors.transparent,
-              width: _trackSize.width,
-              height: _trackSize.height,
-              child: Stack(
+              decoration: BoxDecoration(
+                color: _isAccelerating
+                    ? Colors.green
+                    : _isBraking
+                        ? Colors.red
+                        : Colors.white,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.3),
+                    blurRadius: 5,
+                    spreadRadius: 1,
+                  ),
+                ],
+              ),
+              child: Icon(
+                _isAccelerating
+                    ? Icons.arrow_upward
+                    : _isBraking
+                        ? Icons.arrow_downward
+                        : Icons.radio_button_unchecked,
+                color: Colors.white,
+                size: 20,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRightJoystick() {
+    if (_rightJoystickPosition == null) return const SizedBox();
+
+    final joystickSize = 120.0;
+    final actualPosition = _rightJoystickDragPosition ?? _rightJoystickPosition!;
+
+    final dragOffset =
+        _rightJoystickDragPosition != null ? (_rightJoystickDragPosition! - _rightJoystickPosition!).distance : 0.0;
+
+    // Normalize drag position within bounds
+    final maxDrag = joystickSize / 4;
+    final dragPercent = dragOffset / maxDrag;
+    final normalizedPercent = dragPercent.clamp(0.0, 1.0);
+
+    // Calculate normalized direction
+    Offset direction = Offset.zero;
+    if (_rightJoystickDragPosition != null) {
+      direction = (_rightJoystickDragPosition! - _rightJoystickPosition!).normalize();
+    }
+
+    // Define turning direction
+    _isTurningLeft = _rightJoystickDragPosition != null && direction.dx < -0.2;
+    _isTurningRight = _rightJoystickDragPosition != null && direction.dx > 0.2;
+
+    return Positioned(
+      left: _rightJoystickPosition!.dx - joystickSize / 2,
+      top: _rightJoystickPosition!.dy - joystickSize / 2,
+      width: joystickSize,
+      height: joystickSize,
+      child: Stack(
+        children: [
+          // Joystick background
+          Container(
+            width: joystickSize,
+            height: joystickSize,
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.5),
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: Colors.white.withOpacity(0.3),
+                width: 2,
+              ),
+            ),
+            child: const Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.arrow_back,
+                  color: Colors.white,
+                  size: 20,
+                ),
+                SizedBox(width: 20),
+                Icon(
+                  Icons.arrow_forward,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ],
+            ),
+          ),
+
+          // Joystick handle
+          Positioned(
+            left: joystickSize / 2 - 20 + (direction.dx * maxDrag * normalizedPercent),
+            top: joystickSize / 2 - 20 + (direction.dy * maxDrag * normalizedPercent),
+            width: 40,
+            height: 40,
+            child: Container(
+              decoration: BoxDecoration(
+                color: _isTurningLeft
+                    ? Colors.orange
+                    : _isTurningRight
+                        ? Colors.orange
+                        : Colors.white,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.3),
+                    blurRadius: 5,
+                    spreadRadius: 1,
+                  ),
+                ],
+              ),
+              child: Icon(
+                _isTurningLeft
+                    ? Icons.arrow_back
+                    : _isTurningRight
+                        ? Icons.arrow_forward
+                        : Icons.radio_button_unchecked,
+                color: Colors.white,
+                size: 20,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCountdown() {
+    // Calculate current countdown number
+    int countdownNumber = 3 - (_countdownController.value * 3).floor();
+    if (countdownNumber <= 0) {
+      countdownNumber = 0; // GO!
+    }
+
+    // Determine size and opacity based on animation
+    final progress = _countdownController.value % (1 / 3) * 3;
+    final scale = 1.5 - progress;
+    final opacity = 1.0 - progress;
+
+    return Center(
+      child: AnimatedOpacity(
+        opacity: opacity,
+        duration: Duration.zero,
+        child: Transform.scale(
+          scale: scale,
+          child: Container(
+            width: 150,
+            height: 150,
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.7),
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: countdownNumber == 0 ? Colors.green : Colors.white,
+                width: 5,
+              ),
+            ),
+            child: Center(
+              child: Text(
+                countdownNumber == 0 ? 'GO!' : countdownNumber.toString(),
+                style: TextStyle(
+                  color: countdownNumber == 0 ? Colors.green : Colors.white,
+                  fontSize: 80,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGameOverOverlay() {
+    return Container(
+      color: Colors.black.withOpacity(0.7),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: _success ? Colors.green.shade900 : Colors.red.shade900,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.5),
+                blurRadius: 10,
+                spreadRadius: 2,
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                _success ? 'Level Complete!' : 'Level Failed',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 24),
+              _success
+                  ? Column(
+                      children: [
+                        Icon(
+                          Icons.emoji_events,
+                          color: Colors.amber,
+                          size: 60,
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          'Score: $_score',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 24,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Colors Collected: $_collectedColors',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Color Match: ${(_similarity * 100).toInt()}%',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                          ),
+                        ),
+                      ],
+                    )
+                  : Column(
+                      children: [
+                        Icon(
+                          Icons.error_outline,
+                          color: Colors.red.shade300,
+                          size: 60,
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          _secondsLeft <= 0 ? 'Out of time!' : 'Color match not close enough!',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                          ),
+                        ),
+                      ],
+                    ),
+              const SizedBox(height: 32),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Positioned(
-                    left: _racer.position.dx - _racer.size.width / 2,
-                    top: _racer.position.dy - _racer.size.height / 2,
-                    child: CustomPaint(
-                      size: _racer.size,
-                      painter: RacerPainter(
-                        color: _racer.color,
-                        hintColor: _racer.hintColor,
+                  ElevatedButton.icon(
+                    onPressed: _restartGame,
+                    icon: const Icon(Icons.replay),
+                    label: const Text('Try Again'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 12,
                       ),
                     ),
                   ),
                 ],
               ),
-            ),
+            ],
           ),
-
-          // Countdown overlay
-          if (_countdownActive)
-            Container(
-              color: Colors.black.withOpacity(0.5),
-              child: Center(
-                child: TweenAnimationBuilder<double>(
-                  tween: Tween<double>(begin: 0.5, end: 1.0),
-                  duration: const Duration(milliseconds: 500),
-                  builder: (context, value, child) {
-                    return Transform.scale(
-                      scale: value,
-                      child: Text(
-                        '$_countdownValue',
-                        style: TextStyle(
-                          fontSize: 80,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ),
-
-          // Game over overlay
-          if (_gameOver)
-            Container(
-              color: Colors.black.withOpacity(0.7),
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Race Complete!',
-                      style: TextStyle(
-                        fontSize: 32,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Score: ${_score.round()}',
-                      style: const TextStyle(
-                        fontSize: 24,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-        ],
+        ),
       ),
     );
   }
 
-  Widget _buildColorControls() {
+  Widget _buildPauseOverlay() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(16),
-          topRight: Radius.circular(16),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 8,
-            offset: const Offset(0, -2),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Current mix preview
-          Row(
-            children: [
-              // Color preview
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: _racerColor,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: Colors.white,
-                    width: 2,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: _racerColor.withOpacity(0.3),
-                      blurRadius: 4,
-                      spreadRadius: 1,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Current Mix',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                    ),
-                    Text(
-                      'Tap colors below to mix',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              // Clear selection button
-              TextButton.icon(
-                onPressed: () {
-                  setState(() {
-                    for (final swatch in _swatches) {
-                      swatch.isSelected = false;
-                    }
-                    _selectedColors = [];
-                    _racerColor = Colors.white;
-                    _racer.color = Colors.white;
-                  });
-
-                  widget.onColorMixed(_racerColor);
-                },
-                icon: const Icon(Icons.clear, size: 16),
-                label: const Text('Clear'),
+      color: Colors.black.withOpacity(0.7),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Colors.blueGrey.shade900,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.5),
+                blurRadius: 10,
+                spreadRadius: 2,
               ),
             ],
           ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Game Paused',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 24),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: _resumeGame,
+                    icon: const Icon(Icons.play_arrow),
+                    label: const Text('Resume'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 12,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  ElevatedButton.icon(
+                    onPressed: _restartGame,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Restart'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 12,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
-          const SizedBox(height: 8),
-
-          // Color swatches
-          SizedBox(
-            height: 50,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: _swatches.length,
-              itemBuilder: (context, index) {
-                final swatch = _swatches[index];
-
-                return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                  child: GestureDetector(
-                    onTap: () => _handleColorSwatchTap(swatch),
-                    child: Container(
-                      width: 40,
-                      height: 40,
+  Widget _buildStartScreen() {
+    return Container(
+      color: Colors.black.withOpacity(0.8),
+      child: Center(
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.8,
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Colors.indigo.shade900,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.5),
+                blurRadius: 20,
+                spreadRadius: 5,
+              ),
+            ],
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Colors.indigo.shade800,
+                Colors.indigo.shade900,
+                Colors.purple.shade900,
+              ],
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Color Racer',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 32,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  children: [
+                    Text(
+                      'Target Color',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.8),
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      width: 60,
+                      height: 60,
                       decoration: BoxDecoration(
-                        color: swatch.color,
+                        color: widget.targetColor,
                         shape: BoxShape.circle,
                         border: Border.all(
-                          color: swatch.isSelected ? Colors.white : Colors.transparent,
+                          color: Colors.white,
                           width: 3,
                         ),
                         boxShadow: [
                           BoxShadow(
-                            color: swatch.color.withOpacity(0.3),
-                            blurRadius: 4,
-                            spreadRadius: swatch.isSelected ? 2 : 0,
+                            color: widget.targetColor.withOpacity(0.5),
+                            blurRadius: 10,
+                            spreadRadius: 2,
                           ),
                         ],
                       ),
-                      child: swatch.isSelected
-                          ? const Icon(
-                              Icons.check,
-                              color: Colors.white,
-                              size: 18,
-                            )
-                          : null,
                     ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+              const Text(
+                'Race around the track and collect colors to match your car\'s paint to the target color.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _ControlInstruction(
+                    icon: Icons.arrow_upward,
+                    text: 'Accelerate',
                   ),
-                );
-              },
-            ),
+                  SizedBox(width: 16),
+                  _ControlInstruction(
+                    icon: Icons.arrow_downward,
+                    text: 'Brake',
+                  ),
+                  SizedBox(width: 16),
+                  _ControlInstruction(
+                    icon: Icons.arrow_back,
+                    text: 'Turn Left',
+                  ),
+                  SizedBox(width: 16),
+                  _ControlInstruction(
+                    icon: Icons.arrow_forward,
+                    text: 'Turn Right',
+                  ),
+                ],
+              ),
+              const SizedBox(height: 32),
+              ElevatedButton.icon(
+                onPressed: _startGame,
+                icon: const Icon(Icons.play_arrow),
+                label: const Text('START RACE'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 32,
+                    vertical: 16,
+                  ),
+                  textStyle: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 
-  Color _getPowerUpColor(PowerUpType type) {
-    switch (type) {
-      case PowerUpType.timeBonus:
-        return Colors.blue;
-      case PowerUpType.speedBoost:
-        return Colors.orange;
-      case PowerUpType.colorHint:
-        return Colors.purple;
-    }
-  }
-
-  IconData _getPowerUpIcon(PowerUpType type) {
-    switch (type) {
-      case PowerUpType.timeBonus:
-        return Icons.timer;
-      case PowerUpType.speedBoost:
-        return Icons.speed;
-      case PowerUpType.colorHint:
-        return Icons.palette;
-    }
-  }
-
-  Color _getSimilarityColor(double similarity) {
-    if (similarity >= widget.puzzle.accuracyThreshold) {
+  Color _getSimilarityColor() {
+    if (_similarity >= 0.9) {
       return Colors.green;
-    } else if (similarity >= 0.8) {
+    } else if (_similarity >= 0.75) {
       return Colors.orange;
+    } else if (_similarity >= 0.5) {
+      return Colors.yellow;
     } else {
       return Colors.red;
     }
   }
-}
 
-// Helper classes for game objects
+  void _handlePanStart(DragStartDetails details) {
+    final position = details.localPosition;
 
-class Racer {
-  Offset position;
-  Size size;
-  Color color;
-  Color? hintColor;
-
-  Racer({
-    required this.position,
-    required this.size,
-    required this.color,
-    this.hintColor,
-  });
-}
-
-class ColorGate {
-  Offset position;
-  Size size;
-  Color color;
-  bool passed;
-
-  ColorGate({
-    required this.position,
-    required this.size,
-    required this.color,
-    this.passed = false,
-  });
-}
-
-enum PowerUpType {
-  timeBonus,
-  speedBoost,
-  colorHint,
-}
-
-class PowerUp {
-  Offset position;
-  PowerUpType type;
-  bool collected;
-
-  PowerUp({
-    required this.position,
-    required this.type,
-    this.collected = false,
-  });
-}
-
-class ColorSwatch {
-  Color color;
-  bool isSelected;
-
-  ColorSwatch({
-    required this.color,
-    required this.isSelected,
-  });
-}
-
-// Custom painters
-
-class TrackPainter extends CustomPainter {
-  final double scrollPosition;
-  final double trackLength;
-
-  TrackPainter({
-    required this.scrollPosition,
-    required this.trackLength,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final width = size.width;
-    final height = size.height;
-
-    // Draw track background
-    final backgroundPaint = Paint()..color = Colors.grey.shade900;
-
-    canvas.drawRect(Rect.fromLTWH(0, 0, width, height), backgroundPaint);
-
-    // Draw center line
-    final linePaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3
-      ..strokeCap = StrokeCap.round;
-
-    // Draw dashed line
-    final lineY = scrollPosition % 40;
-    for (double y = -lineY; y < height; y += 40) {
-      canvas.drawLine(
-        Offset(width / 2, y),
-        Offset(width / 2, y + 20),
-        linePaint,
-      );
+    // Check if touch is near left joystick
+    if (_leftJoystickPosition != null) {
+      final distance = (position - _leftJoystickPosition!).distance;
+      if (distance < 80) {
+        setState(() {
+          _leftJoystickDragPosition = position;
+        });
+        return;
+      }
     }
 
-    // Draw side lines
-    final sidePaint = Paint()
-      ..color = Colors.yellow
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 5;
-
-    // Left side line
-    canvas.drawLine(
-      const Offset(30, 0),
-      Offset(30, height),
-      sidePaint,
-    );
-
-    // Right side line
-    canvas.drawLine(
-      Offset(width - 30, 0),
-      Offset(width - 30, height),
-      sidePaint,
-    );
-
-    // Draw finish line if near end
-    final distanceToEnd = trackLength - scrollPosition;
-    if (distanceToEnd >= 0 && distanceToEnd <= height) {
-      final finishPaint = Paint()
-        ..color = Colors.white
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 5;
-
-      // Draw checkered pattern
-      for (int i = 0; i < width ~/ 20; i++) {
-        if (i % 2 == 0) {
-          canvas.drawRect(
-            Rect.fromLTWH(i * 20.0, distanceToEnd, 20, 20),
-            Paint()..color = Colors.white,
-          );
-          canvas.drawRect(
-            Rect.fromLTWH(i * 20.0, distanceToEnd + 20, 20, 20),
-            Paint()..color = Colors.black,
-          );
-        } else {
-          canvas.drawRect(
-            Rect.fromLTWH(i * 20.0, distanceToEnd, 20, 20),
-            Paint()..color = Colors.black,
-          );
-          canvas.drawRect(
-            Rect.fromLTWH(i * 20.0, distanceToEnd + 20, 20, 20),
-            Paint()..color = Colors.white,
-          );
-        }
+    // Check if touch is near right joystick
+    if (_rightJoystickPosition != null) {
+      final distance = (position - _rightJoystickPosition!).distance;
+      if (distance < 80) {
+        setState(() {
+          _rightJoystickDragPosition = position;
+        });
+        return;
       }
     }
   }
 
-  @override
-  bool shouldRepaint(covariant TrackPainter oldDelegate) {
-    return oldDelegate.scrollPosition != scrollPosition;
+  void _handlePanUpdate(DragUpdateDetails details) {
+    final position = details.localPosition;
+
+    // Update drag position for left joystick
+    if (_leftJoystickDragPosition != null) {
+      setState(() {
+        _leftJoystickDragPosition = position;
+      });
+      return;
+    }
+
+    // Update drag position for right joystick
+    if (_rightJoystickDragPosition != null) {
+      setState(() {
+        _rightJoystickDragPosition = position;
+      });
+      return;
+    }
+  }
+
+  void _handlePanEnd(DragEndDetails details) {
+    // Reset joystick positions
+    setState(() {
+      _leftJoystickDragPosition = null;
+      _rightJoystickDragPosition = null;
+      _isAccelerating = false;
+      _isBraking = false;
+      _isTurningLeft = false;
+      _isTurningRight = false;
+    });
   }
 }
 
-class RacerPainter extends CustomPainter {
-  final Color color;
-  final Color? hintColor;
+// Race car class
+class RaceCar {
+  Offset position;
+  Size size;
+  Color color;
+  double angle;
+  Body? body;
 
-  RacerPainter({
+  RaceCar({
+    required this.position,
+    required this.size,
     required this.color,
-    this.hintColor,
+    this.angle = 0,
+  });
+
+  void accelerate() {
+    if (body != null) {
+      // Apply forward force in direction of car
+      final force = Vector2(sin(angle), -cos(angle))..scale(10.0);
+      body!.applyForce(force);
+    }
+  }
+
+  void brake() {
+    if (body != null) {
+      // Apply reverse force in opposite direction of car
+      final force = Vector2(sin(angle), -cos(angle))..scale(-5.0);
+      body!.applyForce(force);
+
+      // Also apply friction
+      applyBrake(0.95);
+    }
+  }
+
+  void turnLeft() {
+    if (body != null) {
+      // Apply torque for left turn
+      body!.applyTorque(-2.0);
+    }
+  }
+
+  void turnRight() {
+    if (body != null) {
+      // Apply torque for right turn
+      body!.applyTorque(2.0);
+    }
+  }
+
+  void applyBrake(double factor) {
+    if (body != null) {
+      // Reduce velocity by factor
+      final velocity = body!.linearVelocity;
+      body!.linearVelocity.setValues(
+        velocity.x * factor,
+        velocity.y * factor,
+      );
+    }
+  }
+
+  void updateFromPhysics() {
+    if (body != null) {
+      // Update position from physics body
+      position = Offset(body!.position.x, body!.position.y);
+
+      // Update angle from physics body
+      angle = body!.angle;
+    }
+  }
+}
+
+// Color pickup class
+class ColorPickup {
+  Offset position;
+  Color color;
+  double radius;
+
+  ColorPickup({
+    required this.position,
+    required this.color,
+    required this.radius,
+  });
+}
+
+// Obstacle class
+class Obstacle {
+  Offset position;
+  Size size;
+  ObstacleType type;
+  double rotation;
+  Body? body;
+
+  Obstacle({
+    required this.position,
+    required this.size,
+    required this.type,
+    this.rotation = 0,
+  });
+}
+
+// Track section class
+class TrackSection {
+  Rect rect;
+  double trackWidth;
+  double cornerRadius;
+  double rotation;
+  TrackSectionType type;
+
+  TrackSection({
+    required this.rect,
+    required this.trackWidth,
+    required this.cornerRadius,
+    required this.rotation,
+    required this.type,
+  });
+}
+
+// Color splash effect
+class ColorSplash {
+  Offset position;
+  Color color;
+  double size;
+  double opacity;
+
+  ColorSplash({
+    required this.position,
+    required this.color,
+    required this.size,
+    required this.opacity,
+  });
+}
+
+// Track configuration
+class TrackConfig {
+  final Offset startPosition;
+  final double startAngle;
+  final List<TrackSectionConfig> trackSections;
+  final List<CheckpointConfig> checkpoints;
+  final Rect finishLine;
+  final List<ObstacleConfig> obstacles;
+
+  TrackConfig({
+    required this.startPosition,
+    required this.startAngle,
+    required this.trackSections,
+    required this.checkpoints,
+    required this.finishLine,
+    required this.obstacles,
+  });
+
+  // Factory constructor to create track config based on level
+  factory TrackConfig.fromLevel(int level) {
+    // Set up track sections based on level
+    switch (level) {
+      case 1:
+        return _createLevel1Track();
+      case 2:
+        return _createLevel2Track();
+      case 3:
+        return _createLevel3Track();
+      case 4:
+        return _createLevel4Track();
+      case 5:
+        return _createLevel5Track();
+      default:
+        return _createLevel1Track();
+    }
+  }
+
+  // Level 1 - Oval track (simple)
+  static TrackConfig _createLevel1Track() {
+    final trackWidth = 120.0;
+    final trackSections = <TrackSectionConfig>[
+      // Top straight
+      TrackSectionConfig(
+        rect: Rect.fromLTWH(200, 100, 400, trackWidth),
+        width: trackWidth,
+        cornerRadius: 0,
+        rotation: 0,
+        type: TrackSectionType.straight,
+      ),
+      // Right curve
+      TrackSectionConfig(
+        rect: Rect.fromLTWH(600, 100, 120, 120),
+        width: trackWidth,
+        cornerRadius: 60,
+        rotation: 0,
+        type: TrackSectionType.curve,
+      ),
+      // Right straight
+      TrackSectionConfig(
+        rect: Rect.fromLTWH(600, 220, trackWidth, 260),
+        width: trackWidth,
+        cornerRadius: 0,
+        rotation: 0,
+        type: TrackSectionType.straight,
+      ),
+      // Bottom curve
+      TrackSectionConfig(
+        rect: Rect.fromLTWH(480, 480, 120, 120),
+        width: trackWidth,
+        cornerRadius: 60,
+        rotation: 1.5 * pi,
+        type: TrackSectionType.curve,
+      ),
+      // Bottom straight
+      TrackSectionConfig(
+        rect: Rect.fromLTWH(200, 480, 280, trackWidth),
+        width: trackWidth,
+        cornerRadius: 0,
+        rotation: 0,
+        type: TrackSectionType.straight,
+      ),
+      // Left curve
+      TrackSectionConfig(
+        rect: Rect.fromLTWH(80, 360, 120, 120),
+        width: trackWidth,
+        cornerRadius: 60,
+        rotation: pi,
+        type: TrackSectionType.curve,
+      ),
+      // Left straight
+      TrackSectionConfig(
+        rect: Rect.fromLTWH(80, 220, trackWidth, 140),
+        width: trackWidth,
+        cornerRadius: 0,
+        rotation: 0,
+        type: TrackSectionType.straight,
+      ),
+      // Top-left curve
+      TrackSectionConfig(
+        rect: Rect.fromLTWH(80, 100, 120, 120),
+        width: trackWidth,
+        cornerRadius: 60,
+        rotation: 0.5 * pi,
+        type: TrackSectionType.curve,
+      ),
+    ];
+
+    // Add checkpoints
+    final checkpoints = <CheckpointConfig>[
+      CheckpointConfig(
+        rect: Rect.fromLTWH(600, 300, 50, 10),
+        rotation: 0,
+      ),
+      CheckpointConfig(
+        rect: Rect.fromLTWH(300, 480, 50, 10),
+        rotation: 0,
+      ),
+      CheckpointConfig(
+        rect: Rect.fromLTWH(80, 300, 50, 10),
+        rotation: 0,
+      ),
+    ];
+
+    // Set finish line
+    final finishLine = Rect.fromLTWH(350, 100, 50, trackWidth);
+
+    // Add obstacles
+    final obstacles = <ObstacleConfig>[
+      ObstacleConfig(
+        position: const Offset(400, 220),
+        size: const Size(30, 30),
+        type: ObstacleType.cone,
+        rotation: 0,
+      ),
+      ObstacleConfig(
+        position: const Offset(450, 380),
+        size: const Size(30, 30),
+        type: ObstacleType.cone,
+        rotation: 0,
+      ),
+      ObstacleConfig(
+        position: const Offset(200, 380),
+        size: const Size(30, 30),
+        type: ObstacleType.cone,
+        rotation: 0,
+      ),
+      ObstacleConfig(
+        position: const Offset(200, 220),
+        size: const Size(30, 30),
+        type: ObstacleType.cone,
+        rotation: 0,
+      ),
+    ];
+
+    return TrackConfig(
+      startPosition: const Offset(300, 160),
+      startAngle: 0,
+      trackSections: trackSections,
+      checkpoints: checkpoints,
+      finishLine: finishLine,
+      obstacles: obstacles,
+    );
+  }
+
+  // Level 2 - Figure 8 track
+  static TrackConfig _createLevel2Track() {
+    final trackWidth = 100.0;
+
+    // Create figure 8 track
+    final trackSections = <TrackSectionConfig>[];
+
+    // Add more complex track sections for figure 8
+
+    // Add checkpoints
+    final checkpoints = <CheckpointConfig>[];
+
+    // Set finish line
+    final finishLine = Rect.fromLTWH(350, 100, 50, trackWidth);
+
+    // Add obstacles
+    final obstacles = <ObstacleConfig>[];
+
+    return TrackConfig(
+      startPosition: const Offset(300, 150),
+      startAngle: 0,
+      trackSections: trackSections,
+      checkpoints: checkpoints,
+      finishLine: finishLine,
+      obstacles: obstacles,
+    );
+  }
+
+  // Level 3 - Complex track with bridges/tunnels
+  static TrackConfig _createLevel3Track() {
+    // Create even more complex track with elevation changes
+
+    final trackWidth = 100.0;
+    final trackSections = <TrackSectionConfig>[];
+    final checkpoints = <CheckpointConfig>[];
+    final finishLine = Rect.fromLTWH(350, 100, 50, trackWidth);
+    final obstacles = <ObstacleConfig>[];
+
+    return TrackConfig(
+      startPosition: const Offset(300, 150),
+      startAngle: 0,
+      trackSections: trackSections,
+      checkpoints: checkpoints,
+      finishLine: finishLine,
+      obstacles: obstacles,
+    );
+  }
+
+  // Level 4 - Technical track with tight corners
+  static TrackConfig _createLevel4Track() {
+    // Create technical track with tight corners
+
+    final trackWidth = 80.0;
+    final trackSections = <TrackSectionConfig>[];
+    final checkpoints = <CheckpointConfig>[];
+    final finishLine = Rect.fromLTWH(350, 100, 50, trackWidth);
+    final obstacles = <ObstacleConfig>[];
+
+    return TrackConfig(
+      startPosition: const Offset(300, 150),
+      startAngle: 0,
+      trackSections: trackSections,
+      checkpoints: checkpoints,
+      finishLine: finishLine,
+      obstacles: obstacles,
+    );
+  }
+
+  // Level 5 - Final challenge track
+  static TrackConfig _createLevel5Track() {
+    // Create final challenge track
+
+    final trackWidth = 80.0;
+    final trackSections = <TrackSectionConfig>[];
+    final checkpoints = <CheckpointConfig>[];
+    final finishLine = Rect.fromLTWH(350, 100, 50, trackWidth);
+    final obstacles = <ObstacleConfig>[];
+
+    return TrackConfig(
+      startPosition: const Offset(300, 150),
+      startAngle: 0,
+      trackSections: trackSections,
+      checkpoints: checkpoints,
+      finishLine: finishLine,
+      obstacles: obstacles,
+    );
+  }
+}
+
+// Track section config
+class TrackSectionConfig {
+  final Rect rect;
+  final double width;
+  final double cornerRadius;
+  final double rotation;
+  final TrackSectionType type;
+
+  TrackSectionConfig({
+    required this.rect,
+    required this.width,
+    required this.cornerRadius,
+    required this.rotation,
+    required this.type,
+  });
+}
+
+// Checkpoint config
+class CheckpointConfig {
+  final Rect rect;
+  final double rotation;
+
+  CheckpointConfig({
+    required this.rect,
+    required this.rotation,
+  });
+}
+
+// Obstacle config
+class ObstacleConfig {
+  final Offset position;
+  final Size size;
+  final ObstacleType type;
+  final double rotation;
+
+  ObstacleConfig({
+    required this.position,
+    required this.size,
+    required this.type,
+    required this.rotation,
+  });
+}
+
+// Enum for track section types
+enum TrackSectionType {
+  straight,
+  curve,
+  checkpoint,
+  finishLine,
+}
+
+// Enum for obstacle types
+enum ObstacleType {
+  cone,
+  barrier,
+  oil,
+  boost,
+}
+
+// Physics world for the racer game
+class RacerPhysicsWorld {
+  final World world = World(Vector2(0, 0)); // No gravity
+  Body? carBody;
+  final List<Body> trackBodies = [];
+  final List<Body> obstacleBodies = [];
+
+  RacerPhysicsWorld() {
+    // Set up world
+  }
+
+  void addCar(RaceCar car) {
+    // Create car body
+    final bodyDef = BodyDef()
+      ..type = BodyType.dynamic
+      ..position = Vector2(car.position.dx, car.position.dy)
+      ..angle = car.angle
+      ..angularDamping = 2.0
+      ..linearDamping = 0.5;
+
+    carBody = world.createBody(bodyDef);
+
+    // Create car shape
+    final shape = PolygonShape()..setAsBox(car.size.width / 2, car.size.height / 2, Vector2.zero(), car.angle);
+
+    // Create fixture
+    final fixtureDef = FixtureDef(shape)
+      ..density = 1.0
+      ..friction = 0.3
+      ..restitution = 0.2;
+
+    carBody!.createFixture(fixtureDef);
+
+    // Store body in car
+    car.body = carBody;
+  }
+
+  void addTrackBounds(TrackSection section) {
+    // Create track boundary bodies
+
+    // For now, simulate with a simple body
+    final bodyDef = BodyDef()
+      ..type = BodyType.static
+      ..position = Vector2(section.rect.center.dx, section.rect.center.dy)
+      ..angle = section.rotation;
+
+    final body = world.createBody(bodyDef);
+
+    // Simple box shape for now
+    final shape = PolygonShape()..setAsBox(section.rect.width / 2, section.rect.height / 2, Vector2.zero(), 0);
+
+    body.createFixture(FixtureDef(shape)
+      ..friction = 0.3
+      ..restitution = 0.2
+      ..filter.categoryBits = 2
+      ..filter.maskBits = 1);
+
+    trackBodies.add(body);
+  }
+
+  void addObstacle(Obstacle obstacle) {
+    // Create obstacle body
+    final bodyDef = BodyDef()
+      ..type = BodyType.static
+      ..position = Vector2(obstacle.position.dx, obstacle.position.dy)
+      ..angle = obstacle.rotation;
+
+    final body = world.createBody(bodyDef);
+
+    // Create shape based on obstacle type
+    Shape shape;
+
+    switch (obstacle.type) {
+      case ObstacleType.cone:
+        shape = CircleShape()..radius = obstacle.size.width / 2;
+        break;
+      case ObstacleType.barrier:
+        shape = PolygonShape()..setAsBox(obstacle.size.width / 2, obstacle.size.height / 2, Vector2.zero(), 0);
+        break;
+      case ObstacleType.oil:
+        shape = CircleShape()..radius = obstacle.size.width / 2;
+        break;
+      case ObstacleType.boost:
+        shape = CircleShape()..radius = obstacle.size.width / 2;
+        break;
+    }
+
+    // Create fixture
+    final fixtureDef = FixtureDef(shape)
+      ..friction = 0.1
+      ..restitution = 0.4;
+
+    body.createFixture(fixtureDef);
+
+    // Store body in obstacle
+    obstacle.body = body;
+
+    obstacleBodies.add(body);
+  }
+
+  void step() {
+    // Step the physics simulation
+    world.stepDt(1 / 60); // 60 FPS
+  }
+
+  bool isCarOffTrack() {
+    // Check if car is off the track
+    return false; // Simplified for now
+  }
+
+  bool hasCarCrossedFinishLine() {
+    // Check if car has crossed the finish line
+    return false; // Simplified for now
+  }
+}
+
+// Custom painter for the race track
+class RaceTrackPainter extends CustomPainter {
+  final List<TrackSection> trackSections;
+  final RaceCar car;
+  final List<ColorPickup> colorPickups;
+  final List<Obstacle> obstacles;
+  final List<ColorSplash> splashes;
+  final double similarity;
+  final Color targetColor;
+
+  RaceTrackPainter({
+    required this.trackSections,
+    required this.car,
+    required this.colorPickups,
+    required this.obstacles,
+    required this.splashes,
+    required this.similarity,
+    required this.targetColor,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
-    final width = size.width;
-    final height = size.height;
+    // Draw background
+    final backgroundPaint = Paint()..color = Colors.grey[800]!;
 
-    // Draw racer body (using a car-like shape)
-    final bodyPath = Path();
+    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), backgroundPaint);
 
-    // Car body
-    bodyPath.moveTo(width * 0.2, height * 0.8);
-    bodyPath.lineTo(width * 0.2, height * 0.5);
-    bodyPath.quadraticBezierTo(width * 0.2, height * 0.3, width * 0.3, height * 0.2);
-    bodyPath.lineTo(width * 0.7, height * 0.2);
-    bodyPath.quadraticBezierTo(width * 0.8, height * 0.3, width * 0.8, height * 0.5);
-    bodyPath.lineTo(width * 0.8, height * 0.8);
-    bodyPath.close();
+    // Draw track sections
+    for (final section in trackSections) {
+      _drawTrackSection(canvas, section);
+    }
 
-    // Draw body with color or hint color
-    final bodyPaint = Paint()
-      ..color = hintColor ?? color
-      ..style = PaintingStyle.fill;
+    // Draw splashes
+    for (final splash in splashes) {
+      _drawSplash(canvas, splash);
+    }
 
-    canvas.drawPath(bodyPath, bodyPaint);
+    // Draw color pickups
+    for (final pickup in colorPickups) {
+      _drawColorPickup(canvas, pickup);
+    }
 
-    // Add highlights
-    final highlightPaint = Paint()
-      ..color = Colors.white.withOpacity(0.3)
+    // Draw obstacles
+    for (final obstacle in obstacles) {
+      _drawObstacle(canvas, obstacle);
+    }
+
+    // Draw car
+    _drawCar(canvas, car);
+  }
+
+  void _drawTrackSection(Canvas canvas, TrackSection section) {
+    Paint paint;
+
+    switch (section.type) {
+      case TrackSectionType.straight:
+      case TrackSectionType.curve:
+        // Track surface
+        paint = Paint()
+          ..color = Colors.grey[600]!
+          ..style = PaintingStyle.fill;
+
+        canvas.drawRect(section.rect, paint);
+
+        // Track border
+        paint = Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 5;
+
+        canvas.drawRect(section.rect, paint);
+        break;
+
+      case TrackSectionType.checkpoint:
+        // Checkpoint
+        paint = Paint()
+          ..color = Colors.blue.withOpacity(0.5)
+          ..style = PaintingStyle.fill;
+
+        canvas.drawRect(section.rect, paint);
+        break;
+
+      case TrackSectionType.finishLine:
+        // Finish line with checkered pattern
+        paint = Paint()
+          ..color = Colors.black
+          ..style = PaintingStyle.fill;
+
+        canvas.drawRect(section.rect, paint);
+
+        // Draw checkered pattern
+        const checkerSize = 10.0;
+        paint = Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.fill;
+
+        for (int i = 0; i < section.rect.width / checkerSize; i++) {
+          for (int j = 0; j < section.rect.height / checkerSize; j++) {
+            if ((i + j) % 2 == 0) {
+              canvas.drawRect(
+                Rect.fromLTWH(
+                  section.rect.left + i * checkerSize,
+                  section.rect.top + j * checkerSize,
+                  checkerSize,
+                  checkerSize,
+                ),
+                paint,
+              );
+            }
+          }
+        }
+        break;
+    }
+  }
+
+  void _drawColorPickup(Canvas canvas, ColorPickup pickup) {
+    // Draw outer glow
+    final outerPaint = Paint()
+      ..color = pickup.color.withOpacity(0.3)
       ..style = PaintingStyle.fill;
 
     canvas.drawCircle(
-      Offset(width * 0.35, height * 0.3),
-      width * 0.1,
-      highlightPaint,
+      Offset(pickup.position.dx, pickup.position.dy),
+      pickup.radius * 1.5,
+      outerPaint,
     );
 
-    // Draw outline
-    final outlinePaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2;
+    // Draw middle glow
+    final middlePaint = Paint()
+      ..color = pickup.color.withOpacity(0.5)
+      ..style = PaintingStyle.fill;
 
-    canvas.drawPath(bodyPath, outlinePaint);
+    canvas.drawCircle(
+      Offset(pickup.position.dx, pickup.position.dy),
+      pickup.radius * 1.2,
+      middlePaint,
+    );
+
+    // Draw main circle
+    final mainPaint = Paint()
+      ..color = pickup.color
+      ..style = PaintingStyle.fill;
+
+    canvas.drawCircle(
+      Offset(pickup.position.dx, pickup.position.dy),
+      pickup.radius,
+      mainPaint,
+    );
+
+    // Draw inner highlight
+    final highlightPaint = Paint()
+      ..color = Colors.white.withOpacity(0.8)
+      ..style = PaintingStyle.fill;
+
+    canvas.drawCircle(
+      Offset(pickup.position.dx - pickup.radius * 0.3, pickup.position.dy - pickup.radius * 0.3),
+      pickup.radius * 0.3,
+      highlightPaint,
+    );
+  }
+
+  void _drawObstacle(Canvas canvas, Obstacle obstacle) {
+    Paint paint;
+
+    // Save canvas state
+    canvas.save();
+
+    // Translate to obstacle position and rotate
+    canvas.translate(obstacle.position.dx, obstacle.position.dy);
+    canvas.rotate(obstacle.rotation);
+
+    switch (obstacle.type) {
+      case ObstacleType.cone:
+        // Draw cone
+        paint = Paint()
+          ..color = Colors.orange
+          ..style = PaintingStyle.fill;
+
+        final path = Path()
+          ..moveTo(0, -obstacle.size.height / 2)
+          ..lineTo(obstacle.size.width / 2, obstacle.size.height / 2)
+          ..lineTo(-obstacle.size.width / 2, obstacle.size.height / 2)
+          ..close();
+
+        canvas.drawPath(path, paint);
+
+        // Draw stripes
+        paint = Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2;
+
+        canvas.drawLine(
+          Offset(0, -obstacle.size.height / 4),
+          Offset(0, obstacle.size.height / 4),
+          paint,
+        );
+        break;
+
+      case ObstacleType.barrier:
+        // Draw barrier
+        paint = Paint()
+          ..color = Colors.red.shade700
+          ..style = PaintingStyle.fill;
+
+        canvas.drawRect(
+          Rect.fromCenter(
+            center: Offset.zero,
+            width: obstacle.size.width,
+            height: obstacle.size.height,
+          ),
+          paint,
+        );
+
+        // Draw stripes
+        paint = Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2;
+
+        for (int i = -1; i <= 1; i += 2) {
+          canvas.drawLine(
+            Offset(i * obstacle.size.width / 4, -obstacle.size.height / 2),
+            Offset(i * obstacle.size.width / 4, obstacle.size.height / 2),
+            paint,
+          );
+        }
+        break;
+
+      case ObstacleType.oil:
+        // Draw oil slick
+        paint = Paint()
+          ..color = Colors.black.withOpacity(0.7)
+          ..style = PaintingStyle.fill;
+
+        canvas.drawCircle(
+          Offset.zero,
+          obstacle.size.width / 2,
+          paint,
+        );
+
+        // Draw oil pattern
+        paint = Paint()
+          ..color = Colors.purple.withOpacity(0.3)
+          ..style = PaintingStyle.fill;
+
+        for (int i = 0; i < 5; i++) {
+          final angle = i * pi / 2.5;
+          canvas.drawCircle(
+            Offset(
+              cos(angle) * obstacle.size.width / 4,
+              sin(angle) * obstacle.size.width / 4,
+            ),
+            obstacle.size.width / 8,
+            paint,
+          );
+        }
+        break;
+
+      case ObstacleType.boost:
+        // Draw boost pad
+        paint = Paint()
+          ..color = Colors.green.shade400
+          ..style = PaintingStyle.fill;
+
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromCenter(
+              center: Offset.zero,
+              width: obstacle.size.width,
+              height: obstacle.size.height,
+            ),
+            Radius.circular(obstacle.size.height / 4),
+          ),
+          paint,
+        );
+
+        // Draw arrow
+        paint = Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.fill;
+
+        final arrowPath = Path()
+          ..moveTo(0, -obstacle.size.height / 3)
+          ..lineTo(obstacle.size.width / 4, 0)
+          ..lineTo(0, obstacle.size.height / 3)
+          ..lineTo(-obstacle.size.width / 4, 0)
+          ..close();
+
+        canvas.drawPath(arrowPath, paint);
+        break;
+    }
+
+    // Restore canvas state
+    canvas.restore();
+  }
+
+  void _drawCar(Canvas canvas, RaceCar car) {
+    // Save canvas state
+    canvas.save();
+
+    // Translate to car position and rotate
+    canvas.translate(car.position.dx, car.position.dy);
+    canvas.rotate(car.angle);
+
+    // Draw car body
+    final bodyPaint = Paint()
+      ..color = car.color
+      ..style = PaintingStyle.fill;
+
+    final carRect = Rect.fromCenter(
+      center: Offset.zero,
+      width: car.size.width,
+      height: car.size.height,
+    );
+
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(carRect, Radius.circular(car.size.width / 3)),
+      bodyPaint,
+    );
+
+    // Draw windows
+    final windowPaint = Paint()
+      ..color = Colors.lightBlueAccent.withOpacity(0.7)
+      ..style = PaintingStyle.fill;
+
+    final windowRect = Rect.fromCenter(
+      center: Offset(0, -car.size.height / 6),
+      width: car.size.width * 0.7,
+      height: car.size.height * 0.25,
+    );
+
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(windowRect, Radius.circular(car.size.width / 6)),
+      windowPaint,
+    );
 
     // Draw wheels
     final wheelPaint = Paint()
       ..color = Colors.black
       ..style = PaintingStyle.fill;
 
-    // Left wheels
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(width * 0.1, height * 0.3, width * 0.1, height * 0.2),
-        const Radius.circular(4),
+    // Front wheels
+    canvas.drawRect(
+      Rect.fromCenter(
+        center: Offset(-car.size.width / 3, -car.size.height / 3),
+        width: car.size.width / 6,
+        height: car.size.height / 5,
       ),
       wheelPaint,
     );
 
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(width * 0.1, height * 0.6, width * 0.1, height * 0.2),
-        const Radius.circular(4),
+    canvas.drawRect(
+      Rect.fromCenter(
+        center: Offset(car.size.width / 3, -car.size.height / 3),
+        width: car.size.width / 6,
+        height: car.size.height / 5,
       ),
       wheelPaint,
     );
 
-    // Right wheels
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(width * 0.8, height * 0.3, width * 0.1, height * 0.2),
-        const Radius.circular(4),
+    // Rear wheels
+    canvas.drawRect(
+      Rect.fromCenter(
+        center: Offset(-car.size.width / 3, car.size.height / 3),
+        width: car.size.width / 6,
+        height: car.size.height / 5,
       ),
       wheelPaint,
     );
 
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(width * 0.8, height * 0.6, width * 0.1, height * 0.2),
-        const Radius.circular(4),
+    canvas.drawRect(
+      Rect.fromCenter(
+        center: Offset(car.size.width / 3, car.size.height / 3),
+        width: car.size.width / 6,
+        height: car.size.height / 5,
       ),
       wheelPaint,
     );
 
-    // If showing hint, add a pulsing effect
-    if (hintColor != null) {
-      final hintPaint = Paint()
-        ..color = hintColor!.withOpacity(0.3)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 4;
+    // Draw headlights
+    final headlightPaint = Paint()
+      ..color = Colors.yellow
+      ..style = PaintingStyle.fill;
 
-      canvas.drawPath(bodyPath, hintPaint);
+    canvas.drawCircle(
+      Offset(-car.size.width / 4, -car.size.height / 2 + 5),
+      car.size.width / 10,
+      headlightPaint,
+    );
+
+    canvas.drawCircle(
+      Offset(car.size.width / 4, -car.size.height / 2 + 5),
+      car.size.width / 10,
+      headlightPaint,
+    );
+
+    // Restore canvas state
+    canvas.restore();
+  }
+
+  void _drawSplash(Canvas canvas, ColorSplash splash) {
+    // Draw color splash
+    final paint = Paint()
+      ..color = splash.color.withOpacity(splash.opacity)
+      ..style = PaintingStyle.fill
+      ..blendMode = BlendMode.screen;
+
+    canvas.drawCircle(
+      Offset(splash.position.dx, splash.position.dy),
+      splash.size,
+      paint,
+    );
+
+    // Draw splash rays
+    for (int i = 0; i < 8; i++) {
+      final angle = i * pi / 4;
+      final rayLength = splash.size * 1.5;
+
+      final startPoint = Offset(
+        splash.position.dx + cos(angle) * splash.size * 0.7,
+        splash.position.dy + sin(angle) * splash.size * 0.7,
+      );
+
+      final endPoint = Offset(
+        splash.position.dx + cos(angle) * rayLength,
+        splash.position.dy + sin(angle) * rayLength,
+      );
+
+      final rayPaint = Paint()
+        ..color = splash.color.withOpacity(splash.opacity * 0.7)
+        ..strokeWidth = 3 * splash.opacity
+        ..strokeCap = StrokeCap.round;
+
+      canvas.drawLine(startPoint, endPoint, rayPaint);
     }
   }
 
   @override
-  bool shouldRepaint(covariant RacerPainter oldDelegate) {
-    return oldDelegate.color != color || oldDelegate.hintColor != hintColor;
+  bool shouldRepaint(covariant RaceTrackPainter oldDelegate) {
+    return true; // Always repaint for animation
+  }
+}
+
+// Helper widget for control instructions
+class _ControlInstruction extends StatelessWidget {
+  final IconData icon;
+  final String text;
+
+  const _ControlInstruction({
+    required this.icon,
+    required this.text,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.2),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            icon,
+            color: Colors.white,
+            size: 20,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          text,
+          style: TextStyle(
+            color: Colors.white.withOpacity(0.7),
+            fontSize: 12,
+          ),
+        ),
+      ],
+    );
   }
 }

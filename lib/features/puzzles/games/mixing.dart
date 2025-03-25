@@ -3,7 +3,7 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:palette_master/core/ClassicMixingLevelGenerator.dart';
+import 'package:palette_master/core/color_mixing_level_generator.dart';
 import 'package:palette_master/core/color_models/color_mixer.dart';
 import 'package:palette_master/core/color_models/rgb_model.dart';
 import 'package:vibration/vibration.dart';

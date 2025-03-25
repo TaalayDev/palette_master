@@ -484,6 +484,7 @@ class _ColorBalanceGameState extends ConsumerState<ColorBalanceGame> with Ticker
                           color: widget.puzzle.targetColor,
                           label: 'Target Color',
                           size: 90,
+                          textColor: Colors.white.withOpacity(0.8),
                         ),
                       );
                     },
@@ -512,6 +513,7 @@ class _ColorBalanceGameState extends ConsumerState<ColorBalanceGame> with Ticker
                     color: _resultColor,
                     label: 'Current Mix',
                     size: 90,
+                    textColor: Colors.white.withOpacity(0.8),
                   ),
                 ],
               ),
@@ -560,7 +562,6 @@ class _ColorBalanceGameState extends ConsumerState<ColorBalanceGame> with Ticker
                     child: Padding(
                       padding: const EdgeInsets.all(16.0),
                       child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,

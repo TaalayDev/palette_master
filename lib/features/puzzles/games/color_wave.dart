@@ -1,21 +1,29 @@
 import 'dart:math';
-import 'dart:ui' as ui;
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:forge2d/forge2d.dart';
 import 'package:palette_master/core/color_models/color_mixer.dart';
-import 'package:palette_master/features/puzzles/models/puzzle.dart';
 import 'package:vibration/vibration.dart';
 
+/// The main color wave game widget
 class ColorWaveGame extends ConsumerStatefulWidget {
-  final Puzzle puzzle;
-  final Color userColor;
+  final Color targetColor;
+  final List<Color> availableColors;
   final Function(Color) onColorMixed;
+  final int level;
+  final VoidCallback onReset;
+  final ValueNotifier<Color?> selectedColorNotifier;
 
   const ColorWaveGame({
     super.key,
-    required this.puzzle,
-    required this.userColor,
+    required this.targetColor,
+    required this.availableColors,
     required this.onColorMixed,
+    required this.level,
+    required this.onReset,
+    required this.selectedColorNotifier,
   });
 
   @override
@@ -23,51 +31,55 @@ class ColorWaveGame extends ConsumerStatefulWidget {
 }
 
 class _ColorWaveGameState extends ConsumerState<ColorWaveGame> with TickerProviderStateMixin {
-  // Animation controllers
-  late AnimationController _waveAnimationController;
-  late AnimationController _transitionController;
-  late AnimationController _pulseController;
-  late Animation<double> _pulseAnimation;
+  // Physics world
+  late World _world;
+  final double _worldScale = 10.0;
 
   // Game state
-  List<ColorWave> _colorWaves = [];
-  List<Color> _selectedColors = [];
-  Color _resultColor = Colors.white;
-  Color _targetGradientStart = Colors.white;
-  Color _targetGradientEnd = Colors.white;
-  Color _userGradientStart = Colors.white;
-  Color _userGradientEnd = Colors.white;
+  final List<WaveEmitter> _emitters = [];
+  final List<WaveParticle> _particles = [];
+  final List<ColorWave> _waves = [];
+  final List<Obstacle> _obstacles = [];
+  Color _currentMixedColor = Colors.white;
   double _similarity = 0.0;
-  int _currentWaveCount = 2;
+  Color? _selectedColor;
+  bool _isPlacing = false;
+  Offset? _placementPosition;
 
-  // Wave parameters
-  double _amplitude = 15.0;
-  double _frequency = 1.0;
-  double _speed = 0.5;
+  // Canvas size
+  Size _canvasSize = Size.zero;
 
-  // Touch interaction
-  ColorWave? _selectedWave;
-  bool _isDraggingAmplitude = false;
-  bool _isDraggingFrequency = false;
+  // Animation controllers
+  late AnimationController _backgroundController;
+  late AnimationController _pulseController;
+  late Animation<double> _pulseAnimation;
+  late AnimationController _waveController;
+
+  // Random generator
+  final Random _random = Random();
 
   // Tutorial state
   bool _showTutorial = true;
   int _tutorialStep = 0;
 
+  // Level config
+  late LevelConfig _levelConfig;
+
   @override
   void initState() {
     super.initState();
 
-    // Setup animation controllers
-    _waveAnimationController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 6000),
-    )..repeat();
+    // Initialize physics world
+    _world = World(Vector2(0, 0)); // No gravity in this game
 
-    _transitionController = AnimationController(
+    // Setup level configuration
+    _levelConfig = _getLevelConfig(widget.level);
+
+    // Initialize animation controllers
+    _backgroundController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1500),
-    )..forward();
+      duration: const Duration(seconds: 20),
+    )..repeat();
 
     _pulseController = AnimationController(
       vsync: this,
@@ -81,130 +93,417 @@ class _ColorWaveGameState extends ConsumerState<ColorWaveGame> with TickerProvid
       ),
     );
 
-    // Initialize game
-    _initializeGame();
+    _waveController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 16), // ~60fps
+    )..addListener(_updatePhysics);
 
-    // Listen to animation updates to recalculate colors
-    _waveAnimationController.addListener(_updateMixedColor);
-  }
+    _waveController.repeat();
 
-  void _initializeGame() {
-    final colors = widget.puzzle.availableColors;
-    final random = Random();
-
-    // Generate target gradient colors
-    final targetIndex1 = random.nextInt(colors.length);
-    int targetIndex2 = random.nextInt(colors.length);
-    while (targetIndex2 == targetIndex1 && colors.length > 1) {
-      targetIndex2 = random.nextInt(colors.length);
-    }
-
-    _targetGradientStart = colors[targetIndex1];
-    _targetGradientEnd = colors[targetIndex2];
-
-    // Initialize with 2 waves to start
+    // Set up initial emitters based on level
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _initializeWaves(2);
+      _initializeLevel();
+
+      // Start with tutorial
+      if (widget.level <= 3) {
+        _showTutorialStep(0);
+      }
     });
 
-    // Initially set user gradient same as target (will be replaced when waves are adjusted)
-    _userGradientStart = Colors.white;
-    _userGradientEnd = Colors.white;
-  }
-
-  void _initializeWaves(int count) {
-    final random = Random();
-    final colors = widget.puzzle.availableColors;
-
-    // Clear existing waves
-    setState(() {
-      _colorWaves = [];
-      _selectedColors = [];
+    // Listen for selected color changes
+    widget.selectedColorNotifier.addListener(() {
+      final selectedColor = widget.selectedColorNotifier.value;
+      if (selectedColor != null) {
+        _handleColorSelect(selectedColor);
+      }
     });
-
-    // Create new waves with more reliable initialization
-    for (int i = 0; i < count; i++) {
-      final colorIndex = random.nextInt(colors.length);
-      final color = colors[colorIndex];
-
-      // Use more stable default values
-      final baseAmplitude = 15.0;
-      final baseFrequency = 1.0;
-      final baseSpeed = 0.5;
-
-      final wave = ColorWave(
-        color: color,
-        amplitude: baseAmplitude,
-        frequency: baseFrequency,
-        speed: baseSpeed,
-        phase: random.nextDouble() * 2 * pi,
-      );
-
-      setState(() {
-        _colorWaves.add(wave);
-        _selectedColors.add(color);
-      });
-    }
-
-    _currentWaveCount = count;
-
-    // Make sure to update the mixed color after initialization
-    _updateMixedColor();
   }
 
   @override
   void dispose() {
-    _waveAnimationController.dispose();
-    _transitionController.dispose();
+    _backgroundController.dispose();
     _pulseController.dispose();
+    _waveController.dispose();
     super.dispose();
   }
 
-  void _updateMixedColor() {
-    if (_colorWaves.isEmpty) {
+  void _initializeLevel() {
+    if (!mounted) return;
+
+    setState(() {
+      _emitters.clear();
+      _waves.clear();
+      _particles.clear();
+      _obstacles.clear();
+    });
+
+    // Create canvas bounds
+    _createBoundaries();
+
+    // Add level-specific obstacles
+    _addObstacles();
+
+    // Add initial emitters if any
+    for (final emitterConfig in _levelConfig.initialEmitters) {
+      _addEmitter(
+        position: emitterConfig.position,
+        color: emitterConfig.color,
+        fixed: emitterConfig.fixed,
+      );
+    }
+  }
+
+  void _createBoundaries() {
+    if (_canvasSize == Size.zero) return;
+
+    // Left wall
+    _createBoundary(
+      Vector2(-1, 0),
+      Vector2(-1, _canvasSize.height / _worldScale),
+    );
+
+    // Right wall
+    _createBoundary(
+      Vector2(_canvasSize.width / _worldScale + 1, 0),
+      Vector2(_canvasSize.width / _worldScale + 1, _canvasSize.height / _worldScale),
+    );
+
+    // Top wall
+    _createBoundary(
+      Vector2(0, -1),
+      Vector2(_canvasSize.width / _worldScale, -1),
+    );
+
+    // Bottom wall
+    _createBoundary(
+      Vector2(0, _canvasSize.height / _worldScale + 1),
+      Vector2(_canvasSize.width / _worldScale, _canvasSize.height / _worldScale + 1),
+    );
+  }
+
+  void _createBoundary(Vector2 start, Vector2 end) {
+    final bodyDef = BodyDef()
+      ..type = BodyType.static
+      ..position = Vector2(0, 0);
+
+    final body = _world.createBody(bodyDef);
+    final shape = EdgeShape()..set(start, end);
+
+    final fixtureDef = FixtureDef(shape)
+      ..restitution = 0.8
+      ..density = 1.0
+      ..friction = 0.3;
+
+    body.createFixture(fixtureDef);
+  }
+
+  void _addObstacles() {
+    for (final obstacleConfig in _levelConfig.obstacles) {
+      final obstacle = Obstacle(
+        position: obstacleConfig.position,
+        radius: obstacleConfig.radius,
+        reflective: obstacleConfig.reflective,
+        absorptive: obstacleConfig.absorptive,
+        color: obstacleConfig.color,
+      );
+
+      _createObstacleBody(obstacle);
+
       setState(() {
-        _resultColor = Colors.white;
-        _similarity = 0.0;
-        _userGradientStart = Colors.white;
-        _userGradientEnd = Colors.white;
+        _obstacles.add(obstacle);
       });
-      widget.onColorMixed(Colors.white);
+    }
+  }
+
+  void _createObstacleBody(Obstacle obstacle) {
+    final bodyDef = BodyDef()
+      ..type = BodyType.static
+      ..position = Vector2(
+        obstacle.position.dx / _worldScale,
+        obstacle.position.dy / _worldScale,
+      );
+
+    final body = _world.createBody(bodyDef);
+    obstacle.body = body;
+
+    final shape = CircleShape()..radius = obstacle.radius / _worldScale;
+
+    final fixtureDef = FixtureDef(shape)
+      ..restitution = obstacle.reflective ? 0.9 : 0.2
+      ..density = 1.0
+      ..friction = obstacle.absorptive ? 0.9 : 0.1
+      ..userData = obstacle;
+
+    body.createFixture(fixtureDef);
+  }
+
+  void _addEmitter({
+    required Offset position,
+    required Color color,
+    bool fixed = false,
+  }) {
+    final emitter = WaveEmitter(
+      position: position,
+      color: color,
+      radius: 20.0,
+      frequency: 1.5 + (_random.nextDouble() * 0.5),
+      fixed: fixed,
+    );
+
+    if (!fixed) {
+      _createEmitterBody(emitter);
+    }
+
+    setState(() {
+      _emitters.add(emitter);
+    });
+
+    // Create ripple effect
+    _createRippleEffect(position, color);
+
+    // Progress tutorial if needed
+    if (_showTutorial && _tutorialStep == 0 && _emitters.length > 1) {
+      _showTutorialStep(1);
+    }
+  }
+
+  void _createEmitterBody(WaveEmitter emitter) {
+    final bodyDef = BodyDef()
+      ..type = BodyType.dynamic
+      ..position = Vector2(
+        emitter.position.dx / _worldScale,
+        emitter.position.dy / _worldScale,
+      )
+      ..linearDamping = 0.8
+      ..angularDamping = 0.8
+      ..fixedRotation = true;
+
+    final body = _world.createBody(bodyDef);
+    emitter.body = body;
+
+    final shape = CircleShape()..radius = emitter.radius / _worldScale;
+
+    final fixtureDef = FixtureDef(shape)
+      ..restitution = 0.7
+      ..density = 0.8
+      ..friction = 0.3
+      ..userData = emitter;
+
+    body.createFixture(fixtureDef);
+  }
+
+  void _createRippleEffect(Offset position, Color color) {
+    for (int i = 0; i < 16; i++) {
+      final angle = i * (pi / 8);
+      final distance = 30.0 + _random.nextDouble() * 20.0;
+      final velocity = 0.5 + _random.nextDouble() * 0.5;
+
+      final particle = WaveParticle(
+        position: position,
+        angle: angle,
+        maxDistance: distance,
+        velocity: velocity,
+        color: color.withOpacity(0.7),
+        size: 8.0 + _random.nextDouble() * 5.0,
+      );
+
+      setState(() {
+        _particles.add(particle);
+      });
+    }
+
+    // Provide haptic feedback
+    Vibration.hasVibrator().then((hasVibrator) {
+      if (hasVibrator ?? false) {
+        Vibration.vibrate(duration: 20, amplitude: 40);
+      }
+    });
+  }
+
+  void _removeEmitter(WaveEmitter emitter) {
+    if (emitter.body != null) {
+      _world.destroyBody(emitter.body!);
+    }
+
+    setState(() {
+      _emitters.remove(emitter);
+    });
+  }
+
+  void _updatePhysics() {
+    if (!mounted) return;
+
+    // Step the physics simulation
+    _world.stepDt(1 / 60); // 60fps
+
+    // Update emitter positions from physics bodies
+    for (final emitter in _emitters) {
+      if (emitter.body != null) {
+        final bodyPosition = emitter.body!.position;
+        emitter.position = Offset(
+          bodyPosition.x * _worldScale,
+          bodyPosition.y * _worldScale,
+        );
+      }
+
+      // Emit waves at regular intervals
+      emitter.timeSinceLastEmission += 1 / 60;
+      if (emitter.timeSinceLastEmission >= 1 / emitter.frequency) {
+        _emitWave(emitter);
+        emitter.timeSinceLastEmission = 0;
+      }
+    }
+
+    // Update wave propagation
+    setState(() {
+      // Update existing waves
+      for (int i = _waves.length - 1; i >= 0; i--) {
+        final wave = _waves[i];
+        wave.radius += wave.speed;
+        wave.opacity -= 0.005;
+
+        // Check collision with obstacles
+        for (final obstacle in _obstacles) {
+          final distance = (obstacle.position - wave.position).distance;
+          final collisionDistance = obstacle.radius + wave.radius;
+
+          if (distance <= collisionDistance && !wave.collidedObstacles.contains(obstacle)) {
+            wave.collidedObstacles.add(obstacle);
+
+            if (obstacle.reflective) {
+              // Create reflected wave
+              _waves.add(ColorWave(
+                position: obstacle.position,
+                color: _mixColors([wave.color, obstacle.color]),
+                radius: 5.0,
+                speed: wave.speed * 0.9,
+                opacity: wave.opacity * 0.9,
+                collidedObstacles: [...wave.collidedObstacles],
+              ));
+            }
+
+            if (obstacle.absorptive) {
+              // Reduce wave speed and opacity
+              wave.speed *= 0.7;
+              wave.opacity *= 0.7;
+            }
+          }
+        }
+
+        // Check collision with other waves
+        for (int j = i - 1; j >= 0; j--) {
+          final otherWave = _waves[j];
+          final distance = (otherWave.position - wave.position).distance;
+          final collisionDistance = otherWave.radius + wave.radius;
+
+          if (distance <= collisionDistance &&
+              !wave.collidedWaves.contains(otherWave) &&
+              !otherWave.collidedWaves.contains(wave)) {
+            wave.collidedWaves.add(otherWave);
+            otherWave.collidedWaves.add(wave);
+
+            // Create interference wave at the collision point
+            final collisionVector = otherWave.position - wave.position;
+            final collisionPoint = wave.position + collisionVector * (wave.radius / collisionDistance);
+
+            // Mix the colors
+            final mixedColor = _mixColors([wave.color, otherWave.color]);
+
+            // _waves.add(ColorWave(
+            //   position: collisionPoint,
+            //   color: mixedColor,
+            //   radius: 5.0,
+            //   speed: (wave.speed + otherWave.speed) / 2,
+            //   opacity: (wave.opacity + otherWave.opacity) / 2,
+            // ));
+          }
+        }
+
+        // Remove faded waves
+        if (wave.opacity <= 0) {
+          _waves.removeAt(i);
+        }
+      }
+
+      // Update particles
+      for (int i = _particles.length - 1; i >= 0; i--) {
+        final particle = _particles[i];
+        particle.distance += particle.velocity;
+        particle.opacity = 1.0 - (particle.distance / particle.maxDistance);
+
+        if (particle.distance >= particle.maxDistance) {
+          _particles.removeAt(i);
+        }
+      }
+    });
+
+    // Calculate mixed color
+    _calculateMixedColor();
+  }
+
+  void _emitWave(WaveEmitter emitter) {
+    final wave = ColorWave(
+      position: emitter.position,
+      color: emitter.color,
+      radius: emitter.radius / 2,
+      speed: 2.0,
+      opacity: 0.7,
+    );
+
+    setState(() {
+      _waves.add(wave);
+    });
+  }
+
+  void _calculateMixedColor() {
+    if (_waves.isEmpty) {
+      _currentMixedColor = Colors.white;
+      _similarity = 0.0;
+      widget.onColorMixed(_currentMixedColor);
       return;
     }
 
-    // Calculate mixed color from waves
-    final colors = _colorWaves.map((wave) => wave.color).toList();
-    final mixedColor = ColorMixer.mixSubtractive(colors);
+    // Calculate the average color of all waves
+    // Weighted by opacity to give prominence to more visible waves
+    double totalWeight = 0;
+    double r = 0, g = 0, b = 0;
 
-    // Update gradient colors
-    final firstColor = _colorWaves.isNotEmpty ? _colorWaves.first.color : Colors.white;
-    final lastColor = _colorWaves.length > 1 ? _colorWaves.last.color : firstColor;
+    for (final wave in _waves) {
+      final weight = wave.opacity;
+      totalWeight += weight;
 
-    setState(() {
-      _resultColor = mixedColor;
-      _userGradientStart = firstColor;
-      _userGradientEnd = lastColor;
-    });
+      r += wave.color.red * weight;
+      g += wave.color.green * weight;
+      b += wave.color.blue * weight;
+    }
 
+    if (totalWeight > 0) {
+      r /= totalWeight;
+      g /= totalWeight;
+      b /= totalWeight;
+    }
+
+    final mixedColor = Color.fromRGBO(
+      r.toInt().clamp(0, 255),
+      g.toInt().clamp(0, 255),
+      b.toInt().clamp(0, 255),
+      1.0,
+    );
+
+    _currentMixedColor = mixedColor;
     widget.onColorMixed(mixedColor);
 
-    // Calculate similarity based on gradient match
-    _calculateGradientSimilarity();
+    // Calculate similarity to target
+    _similarity = _calculateColorSimilarity(mixedColor, widget.targetColor);
+
+    // Progress tutorial if needed
+    if (_showTutorial && _tutorialStep == 1 && _similarity >= 0.7) {
+      _showTutorialStep(2);
+    }
   }
 
-  void _calculateGradientSimilarity() {
-    // Calculate similarity between target gradient and user gradient
-    // We compare both color endpoints of the gradients
-
-    final startSimilarity = _calculateColorSimilarity(_targetGradientStart, _userGradientStart);
-    final endSimilarity = _calculateColorSimilarity(_targetGradientEnd, _userGradientEnd);
-
-    // Overall similarity is the average of start and end similarities
-    final overallSimilarity = (startSimilarity + endSimilarity) / 2.0;
-
-    setState(() {
-      _similarity = overallSimilarity;
-    });
+  Color _mixColors(List<Color> colors) {
+    return ColorMixer.mixSubtractive(colors);
   }
 
   double _calculateColorSimilarity(Color a, Color b) {
@@ -215,992 +514,943 @@ class _ColorWaveGameState extends ConsumerState<ColorWaveGame> with TickerProvid
 
     // Human eyes are more sensitive to green, less to blue
     final distance = (dr * dr * 0.3 + dg * dg * 0.59 + db * db * 0.11);
+
     return (1.0 - sqrt(distance)).clamp(0.0, 1.0);
   }
 
-  void _selectWave(ColorWave? wave) {
+  void _handleColorSelect(Color color) {
     setState(() {
-      _selectedWave = wave;
+      _selectedColor = color;
+      _isPlacing = true;
+      _placementPosition = null;
     });
   }
 
-  void _handlePanStart(DragStartDetails details, ColorWave wave) {
-    _selectWave(wave);
+  void _handlePanStart(DragStartDetails details) {
+    if (!_isPlacing || _selectedColor == null) return;
 
-    // Determine if dragging amplitude or frequency
-    final waveHeight = 100.0; // Height of the wave display area
-    final yPosition = details.localPosition.dy;
-
-    if (yPosition < waveHeight / 2) {
-      // Dragging the upper half affects amplitude
-      setState(() {
-        _isDraggingAmplitude = true;
-        _isDraggingFrequency = false;
-      });
-    } else {
-      // Dragging the lower half affects frequency
-      setState(() {
-        _isDraggingAmplitude = false;
-        _isDraggingFrequency = true;
-      });
-    }
-
-    // Progress tutorial if needed
-    if (_showTutorial && _tutorialStep == 0) {
-      setState(() {
-        _tutorialStep = 1;
-      });
-
-      // Vibrate to indicate progress
-      Vibration.hasVibrator().then((hasVibrator) {
-        if (hasVibrator ?? false) {
-          Vibration.vibrate(duration: 40, amplitude: 40);
-        }
-      });
-    }
+    setState(() {
+      _placementPosition = details.localPosition;
+    });
   }
 
-  void _handlePanUpdate(DragUpdateDetails details, ColorWave wave) {
-    if (_selectedWave != wave) return;
+  void _handlePanUpdate(DragUpdateDetails details) {
+    if (!_isPlacing || _selectedColor == null) return;
 
-    if (_isDraggingAmplitude) {
-      // Change amplitude based on vertical drag
-      final newAmplitude = wave.amplitude - details.delta.dy / 3;
-      setState(() {
-        wave.amplitude = newAmplitude.clamp(5.0, 40.0);
-      });
-    } else if (_isDraggingFrequency) {
-      // Change frequency based on horizontal drag
-      final newFrequency = wave.frequency + details.delta.dx / 100;
-      setState(() {
-        wave.frequency = newFrequency.clamp(0.5, 3.0);
-      });
-
-      // Progress tutorial if needed
-      if (_showTutorial && _tutorialStep == 1) {
-        setState(() {
-          _tutorialStep = 2;
-        });
-
-        // Vibrate to indicate progress
-        Vibration.hasVibrator().then((hasVibrator) {
-          if (hasVibrator ?? false) {
-            Vibration.vibrate(duration: 40, amplitude: 40);
-          }
-        });
-      }
-    }
+    setState(() {
+      _placementPosition = details.localPosition;
+    });
   }
 
   void _handlePanEnd(DragEndDetails details) {
+    if (!_isPlacing || _selectedColor == null || _placementPosition == null) return;
+
+    // Check if placement is valid (not overlapping with existing emitters)
+    bool isValidPlacement = true;
+    for (final emitter in _emitters) {
+      final distance = (_placementPosition! - emitter.position).distance;
+      if (distance < emitter.radius * 2) {
+        isValidPlacement = false;
+        break;
+      }
+    }
+
+    if (isValidPlacement) {
+      _addEmitter(
+        position: _placementPosition!,
+        color: _selectedColor!,
+      );
+    }
+
     setState(() {
-      _isDraggingAmplitude = false;
-      _isDraggingFrequency = false;
+      _isPlacing = false;
+      _selectedColor = null;
+      _placementPosition = null;
     });
   }
 
-  void _changeWaveColor(ColorWave wave, Color newColor) {
+  void _showTutorialStep(int step) {
     setState(() {
-      wave.color = newColor;
-
-      // Update selected colors list
-      final index = _colorWaves.indexOf(wave);
-      if (index >= 0 && index < _selectedColors.length) {
-        _selectedColors[index] = newColor;
-      }
+      _tutorialStep = step;
     });
 
-    // Progress tutorial if needed
-    if (_showTutorial && _tutorialStep == 2) {
-      setState(() {
-        _tutorialStep = 3;
-      });
-
-      // Vibrate to indicate progress
-      Vibration.hasVibrator().then((hasVibrator) {
-        if (hasVibrator ?? false) {
-          Vibration.vibrate(duration: 40, amplitude: 40);
-        }
-      });
-
-      // After all tutorial steps are complete, hide tutorial
-      Future.delayed(const Duration(seconds: 2), () {
-        if (mounted) {
-          setState(() {
-            _showTutorial = false;
-          });
+    // Auto advance tutorial after delay
+    if (step < 3) {
+      Future.delayed(Duration(seconds: step == 0 ? 5 : 6), () {
+        if (mounted && _showTutorial && _tutorialStep == step) {
+          // Auto advance to next step if user hasn't progressed already
+          if (step == 2) {
+            _showTutorialStep(3);
+            // End tutorial after last step
+            Future.delayed(const Duration(seconds: 4), () {
+              if (mounted && _showTutorial) {
+                setState(() {
+                  _showTutorial = false;
+                });
+              }
+            });
+          }
         }
       });
     }
   }
 
-  void _changeWaveSpeed(ColorWave wave, double speedFactor) {
-    setState(() {
-      wave.speed = (wave.speed * speedFactor).clamp(0.1, 3.0);
-    });
-  }
+  LevelConfig _getLevelConfig(int level) {
+    // Screen measurements are determined at build time
+    final screenWidth = _canvasSize.width > 0 ? _canvasSize.width : 360;
+    final screenHeight = _canvasSize.height > 0 ? _canvasSize.height : 600;
 
-  void _addWave() {
-    // Only allow up to 4 waves
-    if (_colorWaves.length >= 4) return;
+    final centerX = screenWidth / 2;
+    final centerY = screenHeight / 2;
 
-    final random = Random();
-    final colors = widget.puzzle.availableColors;
-    final colorIndex = random.nextInt(colors.length);
-    final color = colors[colorIndex];
+    switch (level) {
+      case 1:
+        return LevelConfig(
+          difficulty: 'Beginner',
+          description: 'Create your first wave interference pattern',
+          initialEmitters: [
+            EmitterConfig(
+              position: Offset(centerX - 80, centerY + 50),
+              color: Colors.red,
+              fixed: true,
+            ),
+          ],
+          obstacles: [],
+        );
 
-    final wave = ColorWave(
-      color: color,
-      amplitude: _amplitude,
-      frequency: _frequency,
-      speed: _speed,
-      phase: random.nextDouble() * 2 * pi,
-    );
+      case 2:
+        return LevelConfig(
+          difficulty: 'Beginner',
+          description: 'Mix primary colors to create secondary colors',
+          initialEmitters: [
+            EmitterConfig(
+              position: Offset(centerX - 100, centerY + 50),
+              color: Colors.red,
+              fixed: true,
+            ),
+            EmitterConfig(
+              position: Offset(centerX + 100, centerY + 50),
+              color: Colors.blue,
+              fixed: true,
+            ),
+          ],
+          obstacles: [],
+        );
 
-    setState(() {
-      _colorWaves.add(wave);
-      _selectedColors.add(color);
-      _currentWaveCount++;
-      _selectWave(wave);
-    });
+      case 3:
+        return LevelConfig(
+          difficulty: 'Beginner',
+          description: 'Try adding a reflective obstacle',
+          initialEmitters: [
+            EmitterConfig(
+              position: Offset(centerX - 120, centerY + 80),
+              color: Colors.red,
+              fixed: true,
+            ),
+          ],
+          obstacles: [
+            ObstacleConfig(
+              position: Offset(centerX, centerY - 50),
+              radius: 30,
+              reflective: true,
+              absorptive: false,
+              color: Colors.white.withOpacity(0.7),
+            ),
+          ],
+        );
 
-    // Provide haptic feedback
-    Vibration.hasVibrator().then((hasVibrator) {
-      if (hasVibrator ?? false) {
-        Vibration.vibrate(duration: 40, amplitude: 100);
-      }
-    });
-  }
+      case 4:
+        return LevelConfig(
+          difficulty: 'Intermediate',
+          description: 'Create a complex wave pattern with multiple emitters',
+          initialEmitters: [],
+          obstacles: [
+            ObstacleConfig(
+              position: Offset(centerX, centerY),
+              radius: 35,
+              reflective: true,
+              absorptive: false,
+              color: Colors.white.withOpacity(0.5),
+            ),
+            ObstacleConfig(
+              position: Offset(centerX - 150, centerY - 80),
+              radius: 25,
+              reflective: false,
+              absorptive: true,
+              color: Colors.black.withOpacity(0.3),
+            ),
+            ObstacleConfig(
+              position: Offset(centerX + 150, centerY - 80),
+              radius: 25,
+              reflective: false,
+              absorptive: true,
+              color: Colors.black.withOpacity(0.3),
+            ),
+          ],
+        );
 
-  void _removeWave() {
-    // Always keep at least one wave
-    if (_colorWaves.length <= 1) return;
-
-    setState(() {
-      // Remove the selected wave or the last one if none is selected
-      if (_selectedWave != null && _colorWaves.contains(_selectedWave)) {
-        final index = _colorWaves.indexOf(_selectedWave!);
-        _colorWaves.removeAt(index);
-        if (_selectedColors.length > index) {
-          _selectedColors.removeAt(index);
-        }
-      } else {
-        _colorWaves.removeLast();
-        if (_selectedColors.isNotEmpty) {
-          _selectedColors.removeLast();
-        }
-      }
-
-      _currentWaveCount = _colorWaves.length;
-      _selectWave(null);
-    });
-
-    // Provide haptic feedback
-    Vibration.hasVibrator().then((hasVibrator) {
-      if (hasVibrator ?? false) {
-        Vibration.vibrate(duration: 40, amplitude: 50);
-      }
-    });
-  }
-
-  void _resetWaves() {
-    _initializeWaves(_currentWaveCount);
-
-    // Provide haptic feedback
-    Vibration.hasVibrator().then((hasVibrator) {
-      if (hasVibrator ?? false) {
-        Vibration.vibrate(duration: 40, amplitude: 80);
-      }
-    });
-  }
-
-  void _showHint() {
-    // Show a dialog with hints about how to match the target gradient
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Color Wave Hint'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'Try to match these gradient colors:',
-                style: TextStyle(fontWeight: FontWeight.bold),
+      case 5:
+        return LevelConfig(
+          difficulty: 'Intermediate',
+          description: 'Navigate waves through an obstacle course',
+          initialEmitters: [
+            EmitterConfig(
+              position: Offset(60, 60),
+              color: Colors.red,
+              fixed: true,
+            ),
+            EmitterConfig(
+              position: Offset(screenWidth - 60, 60),
+              color: Colors.blue,
+              fixed: true,
+            ),
+          ],
+          obstacles: [
+            // Create a path of obstacles through the center
+            for (int i = 0; i < 5; i++)
+              ObstacleConfig(
+                position: Offset(centerX, centerY - 100 + i * 50),
+                radius: 20,
+                reflective: i % 2 == 0,
+                absorptive: i % 2 == 1,
+                color: i % 2 == 0 ? Colors.white.withOpacity(0.6) : Colors.black.withOpacity(0.3),
               ),
-              const SizedBox(height: 16),
-              Container(
-                height: 50,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [_targetGradientStart, _targetGradientEnd],
-                    begin: Alignment.centerLeft,
-                    end: Alignment.centerRight,
+          ],
+        );
+
+      case 6:
+        return LevelConfig(
+          difficulty: 'Advanced',
+          description: 'Create harmony with reflection and absorption',
+          initialEmitters: [
+            EmitterConfig(
+              position: Offset(60, centerY),
+              color: Colors.red,
+              fixed: true,
+            ),
+            EmitterConfig(
+              position: Offset(screenWidth - 60, centerY),
+              color: Colors.blue,
+              fixed: true,
+            ),
+          ],
+          obstacles: [
+            // Create a circular arrangement of obstacles
+            for (int i = 0; i < 8; i++)
+              ObstacleConfig(
+                position: Offset(
+                  centerX + cos(i * pi / 4) * 100,
+                  centerY + sin(i * pi / 4) * 100,
+                ),
+                radius: 20,
+                reflective: i % 2 == 0,
+                absorptive: i % 2 == 1,
+                color: i % 2 == 0 ? Colors.white.withOpacity(0.6) : Colors.black.withOpacity(0.3),
+              ),
+
+            // Center obstacle
+            ObstacleConfig(
+              position: Offset(centerX, centerY),
+              radius: 40,
+              reflective: true,
+              absorptive: false,
+              color: Colors.amber.withOpacity(0.3),
+            ),
+          ],
+        );
+
+      case 7:
+        return LevelConfig(
+          difficulty: 'Advanced',
+          description: 'Use color subtraction through absorptive obstacles',
+          initialEmitters: [
+            EmitterConfig(
+              position: Offset(60, 60),
+              color: Colors.white,
+              fixed: true,
+            ),
+          ],
+          obstacles: [
+            // Color-filtering obstacles
+            ObstacleConfig(
+              position: Offset(centerX - 80, centerY),
+              radius: 30,
+              reflective: false,
+              absorptive: true,
+              color: Colors.red.withOpacity(0.5),
+            ),
+            ObstacleConfig(
+              position: Offset(centerX + 80, centerY),
+              radius: 30,
+              reflective: false,
+              absorptive: true,
+              color: Colors.blue.withOpacity(0.5),
+            ),
+            ObstacleConfig(
+              position: Offset(centerX, centerY + 80),
+              radius: 30,
+              reflective: false,
+              absorptive: true,
+              color: Colors.green.withOpacity(0.5),
+            ),
+            // Target zone
+            ObstacleConfig(
+              position: Offset(centerX, centerY - 80),
+              radius: 40,
+              reflective: true,
+              absorptive: false,
+              color: Colors.white.withOpacity(0.3),
+            ),
+          ],
+        );
+
+      case 8:
+        return LevelConfig(
+          difficulty: 'Expert',
+          description: 'Create a complex harmonic pattern',
+          initialEmitters: [],
+          obstacles: [
+            // Spiral pattern of obstacles
+            for (int i = 0; i < 12; i++)
+              ObstacleConfig(
+                position: Offset(
+                  centerX + cos(i * pi / 6) * (50 + i * 10),
+                  centerY + sin(i * pi / 6) * (50 + i * 10),
+                ),
+                radius: 15 + (i % 3) * 5,
+                reflective: i % 3 == 0,
+                absorptive: i % 3 == 1,
+                color: i % 3 == 0
+                    ? Colors.white.withOpacity(0.6)
+                    : i % 3 == 1
+                        ? Colors.black.withOpacity(0.3)
+                        : Colors.amber.withOpacity(0.4),
+              ),
+          ],
+        );
+
+      case 9:
+        return LevelConfig(
+          difficulty: 'Expert',
+          description: 'Master wave interference in a complex environment',
+          initialEmitters: [
+            EmitterConfig(
+              position: Offset(60, 60),
+              color: Colors.red,
+              fixed: true,
+            ),
+            EmitterConfig(
+              position: Offset(screenWidth - 60, 60),
+              color: Colors.blue,
+              fixed: true,
+            ),
+            EmitterConfig(
+              position: Offset(60, screenHeight - 60),
+              color: Colors.green,
+              fixed: true,
+            ),
+            EmitterConfig(
+              position: Offset(screenWidth - 60, screenHeight - 60),
+              color: Colors.yellow,
+              fixed: true,
+            ),
+          ],
+          obstacles: [
+            // Complex pattern of obstacles
+            ObstacleConfig(
+              position: Offset(centerX, centerY),
+              radius: 50,
+              reflective: true,
+              absorptive: false,
+              color: Colors.white.withOpacity(0.5),
+            ),
+            for (int i = 0; i < 8; i++)
+              ObstacleConfig(
+                position: Offset(
+                  centerX + cos(i * pi / 4) * 150,
+                  centerY + sin(i * pi / 4) * 150,
+                ),
+                radius: 25,
+                reflective: i % 2 == 0,
+                absorptive: i % 2 == 1,
+                color: i % 2 == 0 ? Colors.white.withOpacity(0.4) : Colors.black.withOpacity(0.2),
+              ),
+          ],
+        );
+
+      case 10:
+        return LevelConfig(
+          difficulty: 'Expert',
+          description: 'The ultimate wave challenge',
+          initialEmitters: [],
+          obstacles: [
+            // Center obstacle
+            ObstacleConfig(
+              position: Offset(centerX, centerY),
+              radius: 60,
+              reflective: true,
+              absorptive: false,
+              color: Colors.amber.withOpacity(0.3),
+            ),
+            // Surrounding obstacles in a pattern
+            for (int ring = 0; ring < 2; ring++)
+              for (int i = 0; i < 12; i++)
+                ObstacleConfig(
+                  position: Offset(
+                    centerX + cos(i * pi / 6) * (150 + ring * 80),
+                    centerY + sin(i * pi / 6) * (150 + ring * 80),
                   ),
-                  borderRadius: BorderRadius.circular(10),
+                  radius: 20 - ring * 5,
+                  reflective: (i + ring) % 3 == 0,
+                  absorptive: (i + ring) % 3 == 1,
+                  color: (i + ring) % 3 == 0
+                      ? Colors.white.withOpacity(0.5)
+                      : (i + ring) % 3 == 1
+                          ? Colors.black.withOpacity(0.3)
+                          : HSVColor.fromAHSV(0.5, (i * 30) % 360, 0.8, 0.8).toColor(),
                 ),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Tips:',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              const Text('• The wave on the left affects the left side of the gradient'),
-              const Text('• The wave on the right affects the right side of the gradient'),
-              const Text('• Try matching colors to the target gradient ends'),
-              const Text('• Adjust amplitude (top-down) and frequency (left-right)'),
-              const SizedBox(height: 16),
-              Image.asset(
-                'assets/images/wave_hint.png',
-                width: 200,
-                height: 100,
-                fit: BoxFit.contain,
-                errorBuilder: (context, error, stackTrace) => Container(
-                  width: 200,
-                  height: 100,
-                  color: Colors.grey[200],
-                  child: const Center(child: Text('Wave Diagram')),
-                ),
-              ),
-            ],
+          ],
+        );
+
+      default:
+        // For higher levels, create procedurally generated challenges
+        final obstacleCount = min(10 + (level - 10) * 2, 30);
+        final List<ObstacleConfig> obstacles = [];
+
+        // Add center obstacle
+        obstacles.add(
+          ObstacleConfig(
+            position: Offset(centerX, centerY),
+            radius: 40 + (_random.nextDouble() * 20),
+            reflective: _random.nextBool(),
+            absorptive: !_random.nextBool(),
+            color: HSVColor.fromAHSV(0.5, _random.nextDouble() * 360, 0.7, 0.7).toColor(),
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-            },
-            child: const Text('Got it!'),
-          ),
-        ],
-      ),
-    );
+        );
+
+        // Add random obstacles
+        for (int i = 0; i < obstacleCount; i++) {
+          final angle = _random.nextDouble() * pi * 2;
+          final distance = 80 + _random.nextDouble() * (screenWidth / 2 - 100);
+
+          obstacles.add(
+            ObstacleConfig(
+              position: Offset(
+                centerX + cos(angle) * distance,
+                centerY + sin(angle) * distance,
+              ),
+              radius: 15 + _random.nextDouble() * 20,
+              reflective: _random.nextDouble() > 0.6,
+              absorptive: _random.nextDouble() > 0.6,
+              color: HSVColor.fromAHSV(
+                0.5,
+                _random.nextDouble() * 360,
+                0.7,
+                0.7,
+              ).toColor(),
+            ),
+          );
+        }
+
+        return LevelConfig(
+          difficulty: 'Procedural',
+          description: 'Level $level: Mastery challenge',
+          initialEmitters: [],
+          obstacles: obstacles,
+        );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        // Gradient preview section
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Store canvas size for physics calculations
+        _canvasSize = Size(constraints.maxWidth, constraints.maxHeight);
+
+        return GestureDetector(
+          onPanStart: _handlePanStart,
+          onPanUpdate: _handlePanUpdate,
+          onPanEnd: _handlePanEnd,
+          child: Stack(
             children: [
-              // Target gradient
-              _buildGradientPreview(
-                'Target Gradient',
-                [_targetGradientStart, _targetGradientEnd],
-                true,
-              ),
-
-              // Similarity indicator
-              Column(
-                children: [
-                  Icon(
-                    _similarity >= widget.puzzle.accuracyThreshold ? Icons.check_circle : Icons.compare_arrows,
-                    color: _getSimilarityColor(),
-                    size: 30,
-                  ),
-                  Text(
-                    '${(_similarity * 100).toInt()}%',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: _getSimilarityColor(),
-                    ),
-                  ),
-                ],
-              ),
-
-              // Current gradient
-              _buildGradientPreview(
-                'Your Gradient',
-                [_userGradientStart, _userGradientEnd],
-                false,
-              ),
-            ],
-          ),
-        ),
-
-        const SizedBox(height: 16),
-
-        // Wave canvas area
-        Expanded(
-          child: _buildWaveCanvasArea(),
-        ),
-
-        const SizedBox(height: 8),
-
-        // Controls for manipulating waves
-        _buildWaveControls(),
-
-        const SizedBox(height: 8),
-
-        // Color palette for selected wave
-        if (_selectedWave != null) _buildColorPalette(),
-      ],
-    );
-  }
-
-  Widget _buildGradientPreview(String label, List<Color> colors, bool isTarget) {
-    return Column(
-      children: [
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.bold,
-            color: Theme.of(context).colorScheme.onSurface,
-          ),
-        ),
-        const SizedBox(height: 8),
-        AnimatedBuilder(
-          animation: _pulseAnimation,
-          builder: (context, child) {
-            final scale = isTarget && _similarity >= 0.95 ? _pulseAnimation.value : 1.0;
-            return Transform.scale(
-              scale: scale,
-              child: child,
-            );
-          },
-          child: Container(
-            width: 120,
-            height: 60,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: colors,
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
-              ),
-              borderRadius: BorderRadius.circular(10),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.2),
-                  blurRadius: 5,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildWaveCanvasArea() {
-    return Container(
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 5,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Stack(
-        children: [
-          // Wave canvas
-          SizedBox.expand(
-            child: AnimatedBuilder(
-              animation: _waveAnimationController,
-              builder: (context, _) {
-                return CustomPaint(
-                  painter: WavePainter(
-                    waves: _colorWaves,
-                    animationValue: _waveAnimationController.value,
-                    selectedWave: _selectedWave,
-                  ),
-                );
-              },
-            ),
-          ),
-
-          // Single gesture detector for the entire canvas
-          Positioned.fill(
-            child: GestureDetector(
-              onPanStart: (details) {
-                // Find the closest wave to the touch point
-                ColorWave? closestWave;
-                double minDistance = double.infinity;
-
-                for (var wave in _colorWaves) {
-                  // Use a simple distance calculation
-                  final distance = (details.localPosition.dy - MediaQuery.of(context).size.height / 2).abs();
-                  if (distance < minDistance) {
-                    minDistance = distance;
-                    closestWave = wave;
-                  }
-                }
-
-                if (closestWave != null) {
-                  _handlePanStart(details, closestWave);
-                }
-              },
-              onPanUpdate: (details) {
-                if (_selectedWave != null) {
-                  _handlePanUpdate(details, _selectedWave!);
-                }
-              },
-              onPanEnd: _handlePanEnd,
-              onTap: () {
-                // Deselect wave on tap (if no wave was found)
-                setState(() {
-                  _selectedWave = null;
-                });
-              },
-              // Using transparent color to ensure gestures are detected
-              child: Container(
-                color: Colors.transparent,
-              ),
-            ),
-          ),
-
-          // Tutorial overlay if needed
-          if (_showTutorial) _buildTutorialOverlay(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTutorialOverlay() {
-    String message;
-    AlignmentGeometry alignment;
-
-    switch (_tutorialStep) {
-      case 0:
-        message = 'Tap and drag a wave to start';
-        alignment = Alignment.topCenter;
-        break;
-      case 1:
-        message = 'Drag up/down to change amplitude';
-        alignment = Alignment.topCenter;
-        break;
-      case 2:
-        message = 'Drag left/right to change frequency';
-        alignment = Alignment.center;
-        break;
-      case 3:
-        message = 'Change colors to match the target gradient';
-        alignment = Alignment.bottomCenter;
-        break;
-      default:
-        message = '';
-        alignment = Alignment.center;
-    }
-
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          _showTutorial = false;
-        });
-      },
-      child: Positioned.fill(
-        child: Container(
-          color: Colors.black.withOpacity(0.3),
-          alignment: alignment,
-          padding: const EdgeInsets.all(16),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surface,
-              borderRadius: BorderRadius.circular(8),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.2),
-                  blurRadius: 5,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.lightbulb_outline,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(
-                    message,
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: Theme.of(context).colorScheme.onSurface,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildWaveControls() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          _buildControlButton(
-            icon: Icons.remove_circle_outline,
-            label: 'Remove',
-            onPressed: _colorWaves.length > 1 ? _removeWave : null,
-          ),
-          _buildControlButton(
-            icon: Icons.refresh,
-            label: 'Reset',
-            onPressed: _resetWaves,
-          ),
-          if (_selectedWave != null) ...[
-            _buildControlButton(
-              icon: Icons.speed,
-              label: 'Slower',
-              onPressed: () => _changeWaveSpeed(_selectedWave!, 0.8),
-            ),
-            _buildControlButton(
-              icon: Icons.fast_forward,
-              label: 'Faster',
-              onPressed: () => _changeWaveSpeed(_selectedWave!, 1.25),
-            ),
-          ],
-          _buildControlButton(
-            icon: Icons.add_circle_outline,
-            label: 'Add',
-            onPressed: _colorWaves.length < 4 ? _addWave : null,
-          ),
-          _buildControlButton(
-            icon: Icons.help_outline,
-            label: 'Hint',
-            onPressed: _showHint,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildControlButton({
-    required IconData icon,
-    required String label,
-    required VoidCallback? onPressed,
-  }) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        IconButton(
-          onPressed: onPressed,
-          icon: Icon(icon),
-          style: IconButton.styleFrom(
-            backgroundColor: onPressed != null
-                ? Theme.of(context).colorScheme.secondaryContainer
-                : Theme.of(context).colorScheme.surfaceVariant,
-            foregroundColor: onPressed != null
-                ? Theme.of(context).colorScheme.onSecondaryContainer
-                : Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.5),
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.bold,
-            color: onPressed != null
-                ? Theme.of(context).colorScheme.onSurfaceVariant
-                : Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.5),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildColorPalette() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(16),
-          topRight: Radius.circular(16),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 5,
-            offset: const Offset(0, -2),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.palette,
-                color: Theme.of(context).colorScheme.primary,
-                size: 20,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                'Wave Color',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-              ),
-              const Spacer(),
-              if (_selectedWave != null)
-                Container(
-                  width: 24,
-                  height: 24,
-                  decoration: BoxDecoration(
-                    color: _selectedWave!.color,
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: Colors.white,
-                      width: 2,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: _selectedWave!.color.withOpacity(0.3),
-                        blurRadius: 4,
-                        spreadRadius: 1,
+              // Background
+              Positioned.fill(
+                child: AnimatedBuilder(
+                  animation: _backgroundController,
+                  builder: (context, child) {
+                    return CustomPaint(
+                      painter: WaveBackgroundPainter(
+                        animation: _backgroundController.value,
+                        baseColor: _currentMixedColor,
                       ),
-                    ],
-                  ),
+                      size: Size.infinite,
+                    );
+                  },
                 ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 50,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: widget.puzzle.availableColors.length,
-              itemBuilder: (context, index) {
-                final color = widget.puzzle.availableColors[index];
-                final bool isSelected = _selectedWave != null && _selectedWave!.color == color;
+              ),
 
-                return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                  child: GestureDetector(
-                    onTap: _selectedWave != null ? () => _changeWaveColor(_selectedWave!, color) : null,
+              // Waves
+              ..._waves.map((wave) {
+                return Positioned(
+                  left: wave.position.dx - wave.radius,
+                  top: wave.position.dy - wave.radius,
+                  width: wave.radius * 2,
+                  height: wave.radius * 2,
+                  child: Opacity(
+                    opacity: wave.opacity,
                     child: Container(
-                      width: 40,
-                      height: 40,
                       decoration: BoxDecoration(
-                        color: color,
                         shape: BoxShape.circle,
                         border: Border.all(
-                          color: isSelected ? Colors.white : Colors.transparent,
-                          width: 3,
+                          color: wave.color,
+                          width: 2,
                         ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: color.withOpacity(0.3),
-                            blurRadius: 4,
-                            spreadRadius: isSelected ? 2 : 0,
-                          ),
-                        ],
                       ),
                     ),
                   ),
                 );
-              },
-            ),
+              }),
+
+              // Obstacles
+              ..._obstacles.map((obstacle) {
+                return Positioned(
+                  left: obstacle.position.dx - obstacle.radius,
+                  top: obstacle.position.dy - obstacle.radius,
+                  width: obstacle.radius * 2,
+                  height: obstacle.radius * 2,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: obstacle.color,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: obstacle.reflective ? Colors.white.withOpacity(0.5) : Colors.black.withOpacity(0.3),
+                          blurRadius: 8,
+                          spreadRadius: obstacle.reflective ? 2 : 0,
+                        ),
+                      ],
+                      border: Border.all(
+                        color: obstacle.reflective ? Colors.white.withOpacity(0.8) : Colors.black.withOpacity(0.5),
+                        width: 2,
+                      ),
+                    ),
+                    child: Center(
+                      child: Icon(
+                        obstacle.reflective ? Icons.blur_on : Icons.blur_circular,
+                        color: obstacle.reflective ? Colors.white.withOpacity(0.8) : Colors.black.withOpacity(0.5),
+                        size: obstacle.radius * 0.8,
+                      ),
+                    ),
+                  ),
+                );
+              }),
+
+              // Emitters
+              ..._emitters.map((emitter) {
+                return Positioned(
+                  left: emitter.position.dx - emitter.radius,
+                  top: emitter.position.dy - emitter.radius,
+                  width: emitter.radius * 2,
+                  height: emitter.radius * 2,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: emitter.color,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: emitter.color.withOpacity(0.5),
+                          blurRadius: 10,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: Container(
+                        width: emitter.radius * 0.5,
+                        height: emitter.radius * 0.5,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.7),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }),
+
+              // Ripple particles
+              ..._particles.map((particle) {
+                final position = particle.position +
+                    Offset(
+                      cos(particle.angle) * particle.distance,
+                      sin(particle.angle) * particle.distance,
+                    );
+
+                return Positioned(
+                  left: position.dx - particle.size / 2,
+                  top: position.dy - particle.size / 2,
+                  width: particle.size,
+                  height: particle.size,
+                  child: Opacity(
+                    opacity: particle.opacity,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: particle.color,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+                );
+              }),
+
+              // Placement preview
+              if (_isPlacing && _selectedColor != null && _placementPosition != null)
+                Positioned(
+                  left: _placementPosition!.dx - 20,
+                  top: _placementPosition!.dy - 20,
+                  width: 40,
+                  height: 40,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: _selectedColor!.withOpacity(0.7),
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: Colors.white,
+                        width: 2,
+                      ),
+                    ),
+                    child: Center(
+                      child: Container(
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.7),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+              // Tutorial overlay
+              if (_showTutorial)
+                Positioned.fill(
+                  child: Container(
+                    color: Colors.black.withOpacity(0.7),
+                    child: Center(
+                      child: Container(
+                        width: _canvasSize.width * 0.8,
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: Colors.teal.shade900,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: Colors.teal.shade300,
+                            width: 2,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.5),
+                              blurRadius: 20,
+                              spreadRadius: 5,
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _tutorialStep == 0
+                                  ? Icons.waves
+                                  : _tutorialStep == 1
+                                      ? Icons.touch_app
+                                      : _tutorialStep == 2
+                                          ? Icons.color_lens
+                                          : Icons.check_circle,
+                              color: Colors.teal.shade200,
+                              size: 40,
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              _tutorialStep == 0
+                                  ? 'Welcome to Color Waves!'
+                                  : _tutorialStep == 1
+                                      ? 'Create Wave Interactions'
+                                      : _tutorialStep == 2
+                                          ? 'Mix Colors with Waves'
+                                          : 'Match the Target Color',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 20,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              _tutorialStep == 0
+                                  ? 'Select colors from the palette and place emitters on the canvas.'
+                                  : _tutorialStep == 1
+                                      ? 'Waves will propagate from emitters and interact when they collide.'
+                                      : _tutorialStep == 2
+                                          ? 'When waves interact, they create new colors. Try to match the target color.'
+                                          : 'You\'ve got it! Keep experimenting with different placements to create beautiful patterns.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Colors.teal.shade100,
+                                fontSize: 14,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            TextButton(
+                              onPressed: () {
+                                setState(() {
+                                  _showTutorial = false;
+                                });
+                              },
+                              style: TextButton.styleFrom(
+                                backgroundColor: Colors.teal.shade700,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              child: const Text('Got it!'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
+}
 
-  Color _getSimilarityColor() {
-    if (_similarity >= widget.puzzle.accuracyThreshold) {
-      return Colors.green;
-    } else if (_similarity >= 0.8) {
-      return Colors.orange;
-    } else {
-      return Theme.of(context).colorScheme.error;
+/// A wave propagating from an emitter
+class ColorWave {
+  final Offset position;
+  final Color color;
+  double radius;
+  double speed;
+  double opacity;
+  final List<Obstacle> collidedObstacles = [];
+  final List<ColorWave> collidedWaves = [];
+
+  ColorWave({
+    required this.position,
+    required this.color,
+    required this.radius,
+    required this.speed,
+    required this.opacity,
+    List<Obstacle>? collidedObstacles,
+  }) {
+    if (collidedObstacles != null) {
+      this.collidedObstacles.addAll(collidedObstacles);
     }
   }
 }
 
-// Wave class to store wave properties
-class ColorWave {
-  Color color;
-  double amplitude;
-  double frequency;
-  double speed;
-  double phase;
+/// A wave emitter
+class WaveEmitter {
+  Offset position;
+  final Color color;
+  final double radius;
+  final double frequency;
+  double timeSinceLastEmission = 0;
+  final bool fixed;
+  Body? body;
 
-  ColorWave({
+  WaveEmitter({
+    required this.position,
     required this.color,
-    this.amplitude = 15.0,
-    this.frequency = 1.0,
-    this.speed = 0.5,
-    this.phase = 0.0,
+    required this.radius,
+    required this.frequency,
+    required this.fixed,
+    this.body,
   });
 }
 
-// Custom painter for drawing waves
-class WavePainter extends CustomPainter {
-  final List<ColorWave> waves;
-  final double animationValue;
-  final ColorWave? selectedWave;
+/// An obstacle that affects wave propagation
+class Obstacle {
+  final Offset position;
+  final double radius;
+  final bool reflective;
+  final bool absorptive;
+  final Color color;
+  Body? body;
 
-  WavePainter({
-    required this.waves,
-    required this.animationValue,
-    this.selectedWave,
+  Obstacle({
+    required this.position,
+    required this.radius,
+    required this.reflective,
+    required this.absorptive,
+    required this.color,
+    this.body,
+  });
+}
+
+/// A particle used for visual effects
+class WaveParticle {
+  final Offset position;
+  final double angle;
+  double distance = 0;
+  final double maxDistance;
+  final double velocity;
+  final Color color;
+  final double size;
+  double opacity = 1.0;
+
+  WaveParticle({
+    required this.position,
+    required this.angle,
+    required this.maxDistance,
+    required this.velocity,
+    required this.color,
+    required this.size,
+  });
+}
+
+/// Configuration for a level
+class LevelConfig {
+  final String difficulty;
+  final String description;
+  final List<EmitterConfig> initialEmitters;
+  final List<ObstacleConfig> obstacles;
+
+  LevelConfig({
+    required this.difficulty,
+    required this.description,
+    required this.initialEmitters,
+    required this.obstacles,
+  });
+}
+
+/// Configuration for an emitter
+class EmitterConfig {
+  final Offset position;
+  final Color color;
+  final bool fixed;
+
+  EmitterConfig({
+    required this.position,
+    required this.color,
+    required this.fixed,
+  });
+}
+
+/// Configuration for an obstacle
+class ObstacleConfig {
+  final Offset position;
+  final double radius;
+  final bool reflective;
+  final bool absorptive;
+  final Color color;
+
+  ObstacleConfig({
+    required this.position,
+    required this.radius,
+    required this.reflective,
+    required this.absorptive,
+    required this.color,
+  });
+}
+
+/// Custom painter for the wave background
+class WaveBackgroundPainter extends CustomPainter {
+  final double animation;
+  final Color baseColor;
+
+  WaveBackgroundPainter({
+    required this.animation,
+    required this.baseColor,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     final width = size.width;
     final height = size.height;
-    final centerY = height / 2;
 
-    // Draw background
-    canvas.drawRect(
-      Rect.fromLTWH(0, 0, width, height),
-      Paint()..color = Colors.grey.withOpacity(0.1),
+    // Create gradient background
+    final HSVColor hsvColor = HSVColor.fromColor(baseColor);
+    final baseHue = hsvColor.hue;
+
+    final gradient = LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [
+        HSVColor.fromAHSV(1.0, baseHue, 0.7, 0.3).toColor(),
+        HSVColor.fromAHSV(1.0, (baseHue + 30) % 360, 0.8, 0.2).toColor(),
+      ],
     );
 
-    // Draw center line
-    final centerLinePaint = Paint()
-      ..color = Colors.grey.withOpacity(0.5)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1;
+    final rect = Rect.fromLTWH(0, 0, width, height);
+    final paint = Paint()..shader = gradient.createShader(rect);
 
-    canvas.drawLine(
-      Offset(0, centerY),
-      Offset(width, centerY),
-      centerLinePaint,
-    );
+    canvas.drawRect(rect, paint);
 
-    // Draw individual waves
-    for (int i = 0; i < waves.length; i++) {
-      final wave = waves[i];
-      _drawWave(canvas, size, wave, animationValue);
-
-      // Add highlight for selected wave
-      if (wave == selectedWave) {
-        _drawWaveHighlight(canvas, size, wave, animationValue);
-      }
-    }
-
-    // Draw interactive controls if a wave is selected
-    if (selectedWave != null) {
-      _drawInteractiveControls(canvas, size, selectedWave!);
-    }
-  }
-
-  void _drawWave(Canvas canvas, Size size, ColorWave wave, double animationValue) {
-    final width = size.width;
-    final height = size.height;
-    final centerY = height / 2;
-
-    // Create a path for the wave
-    final path = Path();
-
-    // Move to the start point (left edge)
-    path.moveTo(0, centerY);
-
-    // Draw the wave points
-    for (int x = 0; x <= width; x++) {
-      final normalizedX = x / width;
-      final wavePhase = wave.phase + (animationValue * wave.speed * 10);
-
-      final y = centerY + sin((normalizedX * wave.frequency * 2 * pi) + wavePhase) * wave.amplitude;
-      path.lineTo(x.toDouble(), y);
-    }
-
-    // Complete the path by connecting back to bottom
-    path.lineTo(width, height);
-    path.lineTo(0, height);
-    path.close();
-
-    // Draw gradient filling based on wave color
-    final gradientPaint = Paint()
-      ..shader = ui.Gradient.linear(
-        Offset(0, centerY),
-        Offset(0, height),
-        [
-          wave.color.withOpacity(0.7),
-          wave.color.withOpacity(0.0),
-        ],
-      );
-
-    canvas.drawPath(path, gradientPaint);
-
-    // Draw the wave line
+    // Draw subtle wave patterns
     final wavePaint = Paint()
-      ..color = wave.color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.0;
-
-    // Draw just the wave line (not filling to bottom)
-    final linePath = Path();
-    linePath.moveTo(0, centerY + sin(wave.phase + (animationValue * wave.speed * 10)) * wave.amplitude);
-
-    for (int x = 1; x <= width; x++) {
-      final normalizedX = x / width;
-      final wavePhase = wave.phase + (animationValue * wave.speed * 10);
-
-      final y = centerY + sin((normalizedX * wave.frequency * 2 * pi) + wavePhase) * wave.amplitude;
-      linePath.lineTo(x.toDouble(), y);
-    }
-
-    canvas.drawPath(linePath, wavePaint);
-  }
-
-  void _drawWaveHighlight(Canvas canvas, Size size, ColorWave wave, double animationValue) {
-    final width = size.width;
-    final height = size.height;
-    final centerY = height / 2;
-
-    // Create a path for the highlight around the wave
-    final path = Path();
-    path.moveTo(0, centerY + sin(wave.phase + (animationValue * wave.speed * 10)) * wave.amplitude);
-
-    for (int x = 1; x <= width; x++) {
-      final normalizedX = x / width;
-      final wavePhase = wave.phase + (animationValue * wave.speed * 10);
-
-      final y = centerY + sin((normalizedX * wave.frequency * 2 * pi) + wavePhase) * wave.amplitude;
-      path.lineTo(x.toDouble(), y);
-    }
-
-    // Highlighted outline
-    final highlightPaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 5.0
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-
-    canvas.drawPath(path, highlightPaint);
-  }
-
-  void _drawInteractiveControls(Canvas canvas, Size size, ColorWave wave) {
-    final width = size.width;
-    final height = size.height;
-    final centerY = height / 2;
-
-    // Draw amplitude handle (vertical)
-    final amplitudeHandleY = centerY - wave.amplitude - 20;
-    final amplitudeHandlePaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.fill;
-
-    canvas.drawCircle(
-      Offset(width / 2, amplitudeHandleY),
-      10,
-      amplitudeHandlePaint,
-    );
-
-    // Draw outline for amplitude handle
-    final amplitudeOutlinePaint = Paint()
-      ..color = wave.color
+      ..color = Colors.white.withOpacity(0.1)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2;
 
-    canvas.drawCircle(
-      Offset(width / 2, amplitudeHandleY),
-      10,
-      amplitudeOutlinePaint,
-    );
+    // First wave
+    final path1 = Path();
+    path1.moveTo(0, height * 0.3);
 
-    // Draw arrow indicating amplitude
-    canvas.drawLine(
-      Offset(width / 2, centerY),
-      Offset(width / 2, amplitudeHandleY),
-      Paint()
-        ..color = wave.color.withOpacity(0.5)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2
-        ..strokeCap = StrokeCap.round,
-    );
+    for (double x = 0; x <= width; x += 1) {
+      final y = height * 0.3 + sin((x / width * 6 * pi) + (animation * 2 * pi)) * 20;
+      path1.lineTo(x, y);
+    }
 
-    // Draw vertical label for amplitude
-    final textPainter = TextPainter(
-      text: TextSpan(
-        text: 'Amplitude',
-        style: TextStyle(
-          color: wave.color,
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    );
+    canvas.drawPath(path1, wavePaint);
 
-    textPainter.layout();
-    textPainter.paint(
-      canvas,
-      Offset(width / 2 - textPainter.width / 2, amplitudeHandleY - 30),
-    );
+    // Second wave
+    final path2 = Path();
+    path2.moveTo(0, height * 0.6);
 
-    // Draw frequency handle (horizontal)
-    final frequencyHandleX = wave.frequency * width / 3;
-    final frequencyHandlePaint = Paint()
-      ..color = Colors.white
+    for (double x = 0; x <= width; x += 1) {
+      final y = height * 0.6 + sin((x / width * 8 * pi) + (animation * 2 * pi * 1.5)) * 15;
+      path2.lineTo(x, y);
+    }
+
+    canvas.drawPath(path2, wavePaint);
+
+    // Add subtle particle effect
+    final particlePaint = Paint()
+      ..color = Colors.white.withOpacity(0.2)
       ..style = PaintingStyle.fill;
 
-    canvas.drawCircle(
-      Offset(frequencyHandleX, height - 20),
-      10,
-      frequencyHandlePaint,
-    );
+    final random = Random(42); // Fixed seed for deterministic pattern
 
-    // Draw outline for frequency handle
-    final frequencyOutlinePaint = Paint()
-      ..color = wave.color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2;
+    for (int i = 0; i < 30; i++) {
+      final x = random.nextDouble() * width;
+      final y = random.nextDouble() * height;
+      final size = 1 + random.nextDouble() * 3;
 
-    canvas.drawCircle(
-      Offset(frequencyHandleX, height - 20),
-      10,
-      frequencyOutlinePaint,
-    );
+      // Make particles move slightly with animation
+      final offsetX = sin(animation * 2 * pi + i) * 5;
+      final offsetY = cos(animation * 2 * pi + i) * 5;
 
-    // Draw horizontal label for frequency
-    final freqTextPainter = TextPainter(
-      text: TextSpan(
-        text: 'Frequency',
-        style: TextStyle(
-          color: wave.color,
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
+      canvas.drawCircle(
+        Offset(
+          (x + offsetX) % width,
+          (y + offsetY) % height,
         ),
-      ),
-      textDirection: TextDirection.ltr,
-    );
-
-    freqTextPainter.layout();
-    freqTextPainter.paint(
-      canvas,
-      Offset(frequencyHandleX - freqTextPainter.width / 2, height - 50),
-    );
+        size,
+        particlePaint,
+      );
+    }
   }
 
   @override
-  bool shouldRepaint(covariant WavePainter oldDelegate) {
-    return oldDelegate.animationValue != animationValue ||
-        oldDelegate.waves != waves ||
-        oldDelegate.selectedWave != selectedWave;
+  bool shouldRepaint(covariant WaveBackgroundPainter oldDelegate) {
+    return oldDelegate.animation != animation || oldDelegate.baseColor != baseColor;
   }
 }

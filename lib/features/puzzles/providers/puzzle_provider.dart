@@ -166,6 +166,7 @@ class PuzzleState extends _$PuzzleState {
       ],
       targetColor: complementaryColor,
       maxAttempts: 3 + level,
+      accuracyThreshold: 0.9,
     );
   }
 

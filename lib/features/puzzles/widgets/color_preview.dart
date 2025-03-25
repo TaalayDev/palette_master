@@ -4,15 +4,22 @@ class ColorPreview extends StatelessWidget {
   final Color color;
   final String label;
   final double size;
+  final Color? textColor;
 
-  const ColorPreview({super.key, required this.color, required this.label, this.size = 120});
+  const ColorPreview({
+    super.key,
+    required this.color,
+    required this.label,
+    this.size = 120,
+    this.textColor,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(label, style: Theme.of(context).textTheme.titleMedium),
+        Text(label, style: Theme.of(context).textTheme.titleMedium?.copyWith(color: textColor)),
         const SizedBox(height: 8),
         Container(
           width: size,
@@ -24,7 +31,10 @@ class ColorPreview extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 8),
-        Text('RGB(${color.red}, ${color.green}, ${color.blue})', style: Theme.of(context).textTheme.bodySmall),
+        Text(
+          'RGB(${color.red}, ${color.green}, ${color.blue})',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: textColor),
+        ),
       ],
     );
   }
