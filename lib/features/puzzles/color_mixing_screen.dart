@@ -10,6 +10,8 @@ import 'package:palette_master/features/puzzles/widgets/level_completion_animati
 import 'package:palette_master/router/routes.dart';
 import 'package:vibration/vibration.dart';
 
+import '../shared/providers/game_progress_provider.dart';
+
 class ClassicMixingScreen extends ConsumerStatefulWidget {
   final String puzzleId;
   final int level;
@@ -718,7 +720,7 @@ class BackgroundPainter extends CustomPainter {
       y = y % (height * 1.5);
 
       final radius = 10 + random.nextDouble() * 40;
-      final opacity = 0.05 + random.nextDouble() * 0.1;
+      final opacity = (0.05 + random.nextDouble() * 0.1).clamp(0.1, 0.5);
 
       final hue = (random.nextDouble() * 60) + 240; // Purple-blue range
       final color = HSVColor.fromAHSV(opacity, hue, 0.7, 0.8).toColor();

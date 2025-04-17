@@ -4,6 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:palette_master/features/puzzles/models/puzzle.dart';
 import 'package:palette_master/core/color_models/color_mixer.dart';
+import 'package:palette_master/core/services/local_storage_service.dart';
+import 'package:palette_master/core/services/achievments-service.dart';
+
+import '../../shared/providers/game_progress_provider.dart';
+import '../../shared/providers/sound_controller.dart';
 
 part 'puzzle_provider.g.dart';
 
@@ -16,8 +21,8 @@ class PuzzleState extends _$PuzzleState {
   }
 
   AsyncValue<Puzzle?> _loadPuzzle(String puzzleId, int level) {
-    // In a real app, you would load this from a repository
     try {
+      // First check if we should fetch from a repository in the future
       final puzzle = _getSamplePuzzle(puzzleId, level);
       return AsyncValue.data(puzzle);
     } catch (e) {
@@ -36,7 +41,6 @@ class PuzzleState extends _$PuzzleState {
         return _createOpticalIllusionPuzzle(level);
       case 'color_harmony':
         return _createColorHarmonyPuzzle(level);
-
       default:
         throw Exception('Unknown puzzle type: $puzzleId');
     }
@@ -166,7 +170,6 @@ class PuzzleState extends _$PuzzleState {
       ],
       targetColor: complementaryColor,
       maxAttempts: 3 + level,
-      accuracyThreshold: 0.9,
     );
   }
 
@@ -223,7 +226,14 @@ class PuzzleState extends _$PuzzleState {
 
   void nextLevel() {
     if (state.value != null) {
-      state = _loadPuzzle(state.value!.id, state.value!.level + 1);
+      final nextLevel = state.value!.level + 1;
+      state = _loadPuzzle(state.value!.id, nextLevel);
+
+      // Play success sound
+      ref.read(soundControllerProvider.notifier).playSuccess();
+
+      // Update game progress
+      ref.read(gameProgressProvider.notifier).updateProgress(state.value!.id, nextLevel);
     }
   }
 }
@@ -271,6 +281,20 @@ class PuzzleResult extends _$PuzzleResult {
     final success = similarity >= threshold;
 
     state = AsyncValue.data(success);
+
+    // If successful, update achievements
+    if (success) {
+      final isPerfectMatch = similarity >= 0.95;
+      final achievementsNotifier = ref.read(achievementsProvider.notifier);
+      await achievementsNotifier.recordColorMatch(isPerfectMatch, similarity, 1); // Assuming first attempt for now
+
+      // Play success sound
+      ref.read(soundControllerProvider.notifier).playSuccess();
+    } else {
+      // Play failure sound
+      ref.read(soundControllerProvider.notifier).playFailure();
+    }
+
     return success;
   }
 
@@ -283,35 +307,5 @@ class PuzzleResult extends _$PuzzleResult {
     // Human eyes are more sensitive to green, less to blue
     final distance = (dr * dr * 0.3 + dg * dg * 0.59 + db * db * 0.11);
     return 1.0 - sqrt(distance).clamp(0.0, 1.0);
-  }
-}
-
-@riverpod
-class GameProgress extends _$GameProgress {
-  @override
-  Map<String, int> build() {
-    // Store the highest level reached for each puzzle type
-    return {
-      'color_matching': 1,
-      'complementary': 1,
-      'optical_illusion': 1,
-      'color_harmony': 1,
-    };
-  }
-
-  void updateProgress(String puzzleId, int level) {
-    state = {...state};
-    if ((state[puzzleId] ?? 0) < level) {
-      state[puzzleId] = level;
-    }
-  }
-
-  void resetProgress() {
-    state = {
-      'color_matching': 1,
-      'complementary': 1,
-      'optical_illusion': 1,
-      'color_harmony': 1,
-    };
   }
 }

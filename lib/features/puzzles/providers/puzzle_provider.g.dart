@@ -6,7 +6,7 @@ part of 'puzzle_provider.dart';
 // RiverpodGenerator
 // **************************************************************************
 
-String _$puzzleStateHash() => r'b0974cdc68565b0daaa7d9cb9d1b22828129bc1c';
+String _$puzzleStateHash() => r'eab14106c0dc3bf9513a0c9fc7bc8389f3a582de';
 
 /// Copied from Dart SDK
 class _SystemHash {
@@ -212,7 +212,7 @@ final userMixedColorProvider =
 );
 
 typedef _$UserMixedColor = AutoDisposeNotifier<Color>;
-String _$puzzleResultHash() => r'd6fd7ad6f7d1bb0f8edc4779ae3e8d28f40f1c39';
+String _$puzzleResultHash() => r'2ded1394ad188d5b9a2f831f32709e173a1facac';
 
 /// See also [PuzzleResult].
 @ProviderFor(PuzzleResult)
@@ -227,20 +227,5 @@ final puzzleResultProvider =
 );
 
 typedef _$PuzzleResult = AutoDisposeNotifier<AsyncValue<bool?>>;
-String _$gameProgressHash() => r'4d3cb89cfd53e090decb3d91eb13cc7d81c32bec';
-
-/// See also [GameProgress].
-@ProviderFor(GameProgress)
-final gameProgressProvider =
-    AutoDisposeNotifierProvider<GameProgress, Map<String, int>>.internal(
-  GameProgress.new,
-  name: r'gameProgressProvider',
-  debugGetCreateSourceHash:
-      const bool.fromEnvironment('dart.vm.product') ? null : _$gameProgressHash,
-  dependencies: null,
-  allTransitiveDependencies: null,
-);
-
-typedef _$GameProgress = AutoDisposeNotifier<Map<String, int>>;
 // ignore_for_file: type=lint
 // ignore_for_file: subtype_of_sealed_class, invalid_use_of_internal_member, invalid_use_of_visible_for_testing_member, deprecated_member_use_from_same_package

@@ -9,6 +9,8 @@ import 'package:palette_master/features/puzzles/widgets/level_completion_animati
 import 'package:palette_master/router/routes.dart';
 import 'package:vibration/vibration.dart';
 
+import '../shared/providers/game_progress_provider.dart';
+import '../shared/providers/sound_controller.dart';
 import 'games/color_memory.dart';
 
 class ColorMemoryScreen extends ConsumerStatefulWidget {
@@ -30,6 +32,11 @@ class _ColorMemoryScreenState extends ConsumerState<ColorMemoryScreen> with Tick
   int _score = 0;
   Color _selectedColor = Colors.white;
   bool _showHint = false;
+  bool _showColorTheory = false;
+
+  // Achievement tracking
+  int _perfectMatches = 0;
+  int _fastMatches = 0;
 
   // Animation controllers
   late AnimationController _bgController;
@@ -44,6 +51,11 @@ class _ColorMemoryScreenState extends ConsumerState<ColorMemoryScreen> with Tick
   // Neural pattern animation
   late AnimationController _neuronController;
   List<_NeuronConnection> _connections = [];
+
+  // Reward animation
+  late AnimationController _rewardAnimationController;
+  String _rewardText = '';
+  bool _showReward = false;
 
   @override
   void initState() {
@@ -80,9 +92,28 @@ class _ColorMemoryScreenState extends ConsumerState<ColorMemoryScreen> with Tick
       duration: const Duration(seconds: 30),
     )..repeat();
 
+    // Reward animation
+    _rewardAnimationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2000),
+    );
+
+    _rewardAnimationController.addStatusListener((status) {
+      if (status == AnimationStatus.completed) {
+        setState(() {
+          _showReward = false;
+        });
+      }
+    });
+
     // Generate floating particles
     _generateParticles();
     _generateNeuronConnections();
+
+    // Play background music
+    Future.delayed(const Duration(milliseconds: 300), () {
+      ref.read(soundControllerProvider.notifier).playBgm();
+    });
   }
 
   void _generateParticles() {
@@ -156,12 +187,26 @@ class _ColorMemoryScreenState extends ConsumerState<ColorMemoryScreen> with Tick
     _floatingParticlesController.dispose();
     _pulseController.dispose();
     _neuronController.dispose();
+    _rewardAnimationController.dispose();
+
+    // Fade out music
+    ref.read(soundControllerProvider.notifier).fadeBgm();
+
     super.dispose();
   }
 
   void _handleLevelComplete() {
     // Update progress
     ref.read(gameProgressProvider.notifier).updateProgress(widget.puzzleId, widget.level + 1);
+
+    // Update achievement progress
+    if (_perfectMatches >= 3) {
+      showReward('Achievement: Perfect Matcher!');
+    }
+
+    if (_fastMatches >= 2) {
+      showReward('Achievement: Speed Demon!');
+    }
 
     // Provide haptic feedback
     Vibration.hasVibrator().then((hasVibrator) {
@@ -170,14 +215,30 @@ class _ColorMemoryScreenState extends ConsumerState<ColorMemoryScreen> with Tick
       }
     });
 
+    // Play success sound
+    ref.read(soundControllerProvider.notifier).playEffect(SoundType.levelComplete);
+
     // Show level complete animation
     setState(() {
       _showLevelComplete = true;
     });
   }
 
+  void showReward(String rewardText) {
+    setState(() {
+      _rewardText = rewardText;
+      _showReward = true;
+      _rewardAnimationController.reset();
+      _rewardAnimationController.forward();
+    });
+  }
+
   void _nextLevel() {
     final int nextLevel = widget.level + 1;
+
+    // Play click sound
+    ref.read(soundControllerProvider.notifier).playEffect(SoundType.click);
+
     context.pushReplacementNamed(
       AppRoutes.colorMemory.name,
       queryParameters: {
@@ -191,6 +252,32 @@ class _ColorMemoryScreenState extends ConsumerState<ColorMemoryScreen> with Tick
     setState(() {
       _showHint = !_showHint;
     });
+
+    // Play sound
+    ref.read(soundControllerProvider.notifier).playEffect(SoundType.click);
+  }
+
+  void _toggleColorTheory() {
+    setState(() {
+      _showColorTheory = !_showColorTheory;
+    });
+
+    // Play sound
+    ref.read(soundControllerProvider.notifier).playEffect(SoundType.click);
+  }
+
+  void _trackPerfectMatch() {
+    _perfectMatches++;
+    if (_perfectMatches == 3) {
+      showReward('Perfect Matcher: 3 Perfect Matches!');
+    }
+  }
+
+  void _trackFastMatch() {
+    _fastMatches++;
+    if (_fastMatches == 2) {
+      showReward('Speed Demon: Quick Matching!');
+    }
   }
 
   @override
@@ -216,7 +303,12 @@ class _ColorMemoryScreenState extends ConsumerState<ColorMemoryScreen> with Tick
         centerTitle: true,
         actions: [
           IconButton(
-            icon: Icon(Icons.info_outline, color: Colors.indigo.shade200),
+            icon: Icon(_showColorTheory ? Icons.school : Icons.school_outlined, color: Colors.indigo.shade200),
+            onPressed: _toggleColorTheory,
+            tooltip: 'Color Theory',
+          ),
+          IconButton(
+            icon: Icon(_showHint ? Icons.lightbulb : Icons.lightbulb_outline, color: Colors.indigo.shade200),
             onPressed: _toggleHint,
             tooltip: 'Show Hint',
           ),
@@ -238,14 +330,18 @@ class _ColorMemoryScreenState extends ConsumerState<ColorMemoryScreen> with Tick
 
                 // Wrap around screen edges
                 final size = MediaQuery.of(context).size;
-                if (particle.position.dx < -particle.size)
+                if (particle.position.dx < -particle.size) {
                   particle.position = Offset(size.width + particle.size, particle.position.dy);
-                if (particle.position.dx > size.width + particle.size)
+                }
+                if (particle.position.dx > size.width + particle.size) {
                   particle.position = Offset(-particle.size, particle.position.dy);
-                if (particle.position.dy < -particle.size)
+                }
+                if (particle.position.dy < -particle.size) {
                   particle.position = Offset(particle.position.dx, size.height + particle.size);
-                if (particle.position.dy > size.height + particle.size)
+                }
+                if (particle.position.dy > size.height + particle.size) {
                   particle.position = Offset(particle.position.dx, -particle.size);
+                }
               }
 
               return Stack(
@@ -306,11 +402,6 @@ class _ColorMemoryScreenState extends ConsumerState<ColorMemoryScreen> with Tick
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          // Top section - Score and level info
-                          _buildTopSection(context, puzzle),
-
-                          const SizedBox(height: 12),
-
                           // Game area
                           Expanded(
                             child: Container(
@@ -356,6 +447,12 @@ class _ColorMemoryScreenState extends ConsumerState<ColorMemoryScreen> with Tick
 
                     // Hint overlay
                     if (_showHint) _buildHintOverlay(context, puzzle),
+
+                    // Color theory overlay
+                    if (_showColorTheory) _buildColorTheoryOverlay(context, puzzle),
+
+                    // Reward animation overlay
+                    if (_showReward) _buildRewardOverlay(),
 
                     // Level complete overlay
                     if (_showLevelComplete)
@@ -476,121 +573,77 @@ class _ColorMemoryScreenState extends ConsumerState<ColorMemoryScreen> with Tick
     }
   }
 
-  Widget _buildTopSection(BuildContext context, Puzzle puzzle) {
-    // Get level type based on level number
-    String levelType = 'Beginner';
-    if (puzzle.level > 5 && puzzle.level <= 10) {
-      levelType = 'Complementary';
-    } else if (puzzle.level > 10 && puzzle.level <= 15) {
-      levelType = 'Sequence';
-    } else if (puzzle.level > 15) {
-      levelType = 'Mixing';
-    }
-
+  Widget _buildRewardOverlay() {
     return AnimatedBuilder(
-      animation: _pulseAnimation,
+      animation: _rewardAnimationController,
       builder: (context, child) {
-        return Transform.scale(
-          scale: _pulseAnimation.value,
-          child: child,
+        final value = _rewardAnimationController.value;
+        double opacity = 0.0;
+        double scale = 1.0;
+
+        if (value < 0.3) {
+          // Fade in and scale up
+          opacity = value / 0.3;
+          scale = 0.5 + 0.5 * (value / 0.3);
+        } else if (value > 0.7) {
+          // Fade out
+          opacity = 1.0 - ((value - 0.7) / 0.3);
+        } else {
+          // Hold
+          opacity = 1.0;
+          scale = 1.0;
+        }
+
+        return Positioned(
+          top: MediaQuery.of(context).size.height * 0.2,
+          left: 0,
+          right: 0,
+          child: Center(
+            child: Opacity(
+              opacity: opacity,
+              child: Transform.scale(
+                scale: scale,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.shade700,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.amber.shade500.withOpacity(0.6),
+                        blurRadius: 10,
+                        spreadRadius: 5,
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.emoji_events,
+                        color: Colors.white,
+                        size: 30,
+                      ),
+                      const SizedBox(width: 16),
+                      Flexible(
+                        child: Text(
+                          _rewardText,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
         );
       },
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.3),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: Colors.indigo.shade300.withOpacity(0.3),
-            width: 1,
-          ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            // Level info
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      Icons.memory,
-                      color: Colors.indigo.shade200,
-                      size: 16,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      'Level ${puzzle.level}: $levelType',
-                      style: TextStyle(
-                        color: Colors.indigo.shade200,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  _getLevelDescription(puzzle.level),
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
-
-            // Score display
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.indigo.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: Colors.indigo.shade300.withOpacity(0.5),
-                  width: 1,
-                ),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    'SCORE',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  Text(
-                    _score.toString(),
-                    style: TextStyle(
-                      color: Colors.indigo.shade200,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
     );
-  }
-
-  String _getLevelDescription(int level) {
-    if (level <= 5) {
-      return 'Match pairs of identical colors';
-    } else if (level <= 10) {
-      return 'Match each color with its complementary pair';
-    } else if (level <= 15) {
-      return 'Memorize and repeat the color sequence';
-    } else {
-      return 'Find component colors that create each mix';
-    }
   }
 
   Widget _buildHintOverlay(BuildContext context, Puzzle puzzle) {
@@ -605,6 +658,7 @@ class _ColorMemoryScreenState extends ConsumerState<ColorMemoryScreen> with Tick
         'Try to remember the positions of cards you\'ve seen',
         'Match all pairs to complete the level',
         'Fewer moves means a higher score',
+        'Build a streak for combo multipliers!',
       ];
     } else if (level <= 10) {
       title = 'Complementary Colors';
@@ -613,6 +667,7 @@ class _ColorMemoryScreenState extends ConsumerState<ColorMemoryScreen> with Tick
         'Complementary colors are opposite on the color wheel',
         'Red pairs with Cyan, Blue with Yellow, Green with Magenta',
         'These pairs create dynamic contrast when placed together',
+        'Try to match pairs in a row for higher scores!',
       ];
     } else if (level <= 15) {
       title = 'Color Sequence Memory';
@@ -621,6 +676,7 @@ class _ColorMemoryScreenState extends ConsumerState<ColorMemoryScreen> with Tick
         'Repeat the exact sequence in the same order',
         'Sequences get longer as levels progress',
         'You\'ll have limited time to reproduce the sequence',
+        'Pay attention to the pattern - some sequences may have a logic to them',
       ];
     } else {
       title = 'Color Mixing Memory';
@@ -629,6 +685,7 @@ class _ColorMemoryScreenState extends ConsumerState<ColorMemoryScreen> with Tick
         'Remember how colors combine in subtractive mixing',
         'Red + Yellow = Orange, Blue + Yellow = Green, etc.',
         'Both component colors must be selected to match',
+        'The reference colors at the top show the mixed colors you need to create',
       ];
     }
 
@@ -689,7 +746,11 @@ class _ColorMemoryScreenState extends ConsumerState<ColorMemoryScreen> with Tick
                       return _buildHintItem(
                         (index + 1).toString(),
                         hints[index],
-                        index == 0 ? Icons.touch_app : (index == 1 ? Icons.visibility : Icons.lightbulb),
+                        index == 0
+                            ? Icons.touch_app
+                            : (index == 1
+                                ? Icons.visibility
+                                : (index == 2 ? Icons.lightbulb : (index == 3 ? Icons.stars : Icons.functions))),
                       );
                     }),
                   ),
@@ -711,6 +772,484 @@ class _ColorMemoryScreenState extends ConsumerState<ColorMemoryScreen> with Tick
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildColorTheoryOverlay(BuildContext context, Puzzle puzzle) {
+    int level = puzzle.level;
+    String title;
+    Widget content;
+
+    if (level <= 5) {
+      title = 'Primary Colors';
+      content = _buildPrimaryColorsTheory();
+    } else if (level <= 10) {
+      title = 'Complementary Colors';
+      content = _buildComplementaryColorsTheory();
+    } else if (level <= 15) {
+      title = 'Sequence & Pattern Recognition';
+      content = _buildPatternTheory();
+    } else {
+      title = 'Color Mixing Theory';
+      content = _buildColorMixingTheory();
+    }
+
+    return GestureDetector(
+      onTap: _toggleColorTheory,
+      child: Container(
+        color: Colors.black.withOpacity(0.9),
+        child: Center(
+          child: Container(
+            width: MediaQuery.of(context).size.width * 0.9,
+            height: MediaQuery.of(context).size.height * 0.7,
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1035),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: Colors.indigo.shade700,
+                width: 1,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.indigo.shade900.withOpacity(0.5),
+                  blurRadius: 20,
+                  spreadRadius: 5,
+                ),
+              ],
+            ),
+            child: Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.school, color: Colors.amber.shade300),
+                    const SizedBox(width: 10),
+                    Text(
+                      'Color Theory: $title',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.amber.shade300,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: content,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  onPressed: _toggleColorTheory,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.amber.shade700,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                  child: const Text('Back to Game'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPrimaryColorsTheory() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildTheorySection(
+          'Primary Colors',
+          'Primary colors cannot be created by mixing other colors. In traditional color theory, the primary colors are:',
+          [
+            ColorInfo(Colors.red, 'Red'),
+            ColorInfo(Colors.blue, 'Blue'),
+            ColorInfo(Colors.yellow, 'Yellow'),
+          ],
+        ),
+        _buildTheorySection(
+          'Secondary Colors',
+          'Secondary colors are created by mixing two primary colors in equal amounts:',
+          [
+            ColorInfo(Colors.purple, 'Purple (Red + Blue)'),
+            ColorInfo(Colors.green, 'Green (Blue + Yellow)'),
+            ColorInfo(Colors.orange, 'Orange (Red + Yellow)'),
+          ],
+        ),
+        _buildTheorySection(
+          'Tertiary Colors',
+          'Tertiary colors are created by mixing a primary and a neighboring secondary color:',
+          [
+            ColorInfo(Colors.red.shade900, 'Red-Purple'),
+            ColorInfo(Colors.deepPurple, 'Blue-Purple'),
+            ColorInfo(Colors.lightBlue, 'Blue-Green'),
+            ColorInfo(Colors.lightGreen, 'Yellow-Green'),
+            ColorInfo(Colors.amber, 'Yellow-Orange'),
+            ColorInfo(Colors.deepOrange, 'Red-Orange'),
+          ],
+        ),
+        _buildTheoryTip(
+          'Memory Tip: Memorizing the position of colors on the color wheel can help you quickly identify relationships between colors.',
+        ),
+      ],
+    );
+  }
+
+  Widget _buildComplementaryColorsTheory() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildTheorySection(
+          'Complementary Colors',
+          'Complementary colors are directly opposite each other on the color wheel. They create maximum contrast and vibrance when placed side by side:',
+          [
+            ColorInfo(Colors.red, 'Red', complementary: Colors.cyan),
+            ColorInfo(Colors.yellow, 'Yellow', complementary: Colors.blue),
+            ColorInfo(Colors.green, 'Green', complementary: Colors.purple.shade300),
+            ColorInfo(Colors.blue, 'Blue', complementary: Colors.yellow),
+            ColorInfo(Colors.purple, 'Purple', complementary: Colors.green.shade300),
+            ColorInfo(Colors.cyan, 'Cyan', complementary: Colors.red),
+          ],
+        ),
+        _buildTheorySection(
+          'Properties of Complementary Colors',
+          'Complementary color pairs have these special properties:',
+          [],
+          description:
+              '• They create strong contrast when placed side by side\n• They create brown/gray when mixed together\n• They can make each other appear more vibrant\n• They are used to create shadow colors (add the complement to create a natural shadow)',
+        ),
+        _buildTheorySection(
+          'Using Complementary Colors',
+          'Complementary colors are useful in these situations:',
+          [],
+          description:
+              '• Creating emphasis and focal points\n• Making text more readable against backgrounds\n• Creating vibrant designs that "pop"\n• Creating natural-looking shadows in art',
+        ),
+        _buildTheoryTip(
+          'Memory Tip: Complementary colors are always across from each other on the color wheel. Red is opposite cyan, blue is opposite yellow, etc.',
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPatternTheory() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildTheorySection(
+          'Color Sequences',
+          'Color sequences follow patterns that our brains can recognize and remember. These patterns can be based on:',
+          [],
+          description:
+              '• Hue progression (moving around the color wheel)\n• Saturation changes (from vivid to muted)\n• Brightness changes (from light to dark)\n• Combinations of the above',
+        ),
+        _buildTheorySection(
+          'Working Memory and Colors',
+          'The average person can remember 5-9 items in their short-term working memory. This is why color sequences become more challenging as they get longer.',
+          [],
+          description:
+              'Strategies to remember longer sequences:\n• Chunking: Group colors into meaningful patterns\n• Visualization: Create a mental image or story\n• Verbalization: Name the colors in sequence\n• Association: Connect colors to familiar objects',
+        ),
+        _buildTheorySection(
+          'Pattern Recognition',
+          'Our brains naturally look for patterns. In color sequences, these might include:',
+          [],
+          description:
+              '• Repeating elements (Red-Blue-Red-Blue)\n• Alternating patterns (warm-cool-warm-cool)\n• Gradual progressions (light to dark)\n• Color relationships (complementary pairs)',
+        ),
+        _buildTheoryTip(
+          'Memory Tip: When memorizing color sequences, try to find patterns or create a story that links the colors together in a meaningful way.',
+        ),
+      ],
+    );
+  }
+
+  Widget _buildColorMixingTheory() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildTheorySection(
+          'Subtractive Color Mixing',
+          'When mixing pigments or paints (subtractive mixing), colors absorb (subtract) certain wavelengths of light:',
+          [],
+          description:
+              '• Red + Yellow = Orange\n• Yellow + Blue = Green\n• Blue + Red = Purple\n• All colors mixed = Brown/Black',
+        ),
+        _buildTheorySection(
+          'Color Mixing Proportions',
+          'The proportion of each color determines the final result:',
+          [
+            ColorInfo(Colors.red, 'Red',
+                proportion: 2, secondColor: Colors.yellow, secondProportion: 1, resultColor: Colors.deepOrange),
+            ColorInfo(Colors.yellow, 'Yellow',
+                proportion: 2, secondColor: Colors.blue, secondProportion: 1, resultColor: Colors.lightGreen),
+            ColorInfo(Colors.blue, 'Blue',
+                proportion: 2, secondColor: Colors.red, secondProportion: 1, resultColor: Colors.deepPurple),
+          ],
+        ),
+        _buildTheorySection(
+          'Tints, Tones, and Shades',
+          'You can modify colors by adding white, gray, or black:',
+          [
+            ColorInfo(Colors.red, 'Original Red'),
+            ColorInfo(Colors.red.shade300, 'Tint (+ White)'),
+            ColorInfo(Colors.red.shade200.withOpacity(0.7), 'Tone (+ Gray)'),
+            ColorInfo(Colors.red.shade900, 'Shade (+ Black)'),
+          ],
+        ),
+        _buildTheorySection(
+          'Complex Color Mixing',
+          'Creating specific colors often requires mixing multiple primaries in different proportions:',
+          [],
+          description:
+              '• Turquoise: Blue + Green (+ tiny bit of Yellow)\n• Coral: Red + Orange + White\n• Lavender: Purple + White (+ tiny bit of Red)\n• Brown: Orange + Blue (or any complement pair)',
+        ),
+        _buildTheoryTip(
+          'Memory Tip: Think of color mixing as a recipe. Primary colors are your basic ingredients, and the proportions determine the final result.',
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTheorySection(String title, String intro, List<ColorInfo> colors, {String? description}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            intro,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 14,
+            ),
+          ),
+          if (description != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                description,
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          if (colors.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 16),
+              child: Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: colors.map((colorInfo) => _buildColorSample(colorInfo)).toList(),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildColorSample(ColorInfo colorInfo) {
+    if (colorInfo.complementary != null) {
+      // Complementary color display
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 80,
+            height: 40,
+            decoration: BoxDecoration(
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(8),
+                topRight: Radius.circular(8),
+              ),
+              color: colorInfo.color,
+            ),
+          ),
+          Container(
+            width: 80,
+            height: 40,
+            decoration: BoxDecoration(
+              borderRadius: const BorderRadius.only(
+                bottomLeft: Radius.circular(8),
+                bottomRight: Radius.circular(8),
+              ),
+              color: colorInfo.complementary,
+            ),
+          ),
+          const SizedBox(height: 4),
+          SizedBox(
+            width: 80,
+            child: Text(
+              colorInfo.name,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 12,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ],
+      );
+    } else if (colorInfo.secondColor != null && colorInfo.resultColor != null) {
+      // Color mixing display
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(8),
+                    bottomLeft: Radius.circular(8),
+                  ),
+                  color: colorInfo.color,
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  '${colorInfo.proportion}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  borderRadius: const BorderRadius.only(
+                    topRight: Radius.circular(8),
+                    bottomRight: Radius.circular(8),
+                  ),
+                  color: colorInfo.secondColor,
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  '${colorInfo.secondProportion}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Container(
+            width: 80,
+            height: 30,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              color: colorInfo.resultColor,
+            ),
+            alignment: Alignment.center,
+            child: const Icon(
+              Icons.arrow_downward,
+              color: Colors.white,
+              size: 16,
+            ),
+          ),
+          const SizedBox(height: 4),
+          SizedBox(
+            width: 80,
+            child: Text(
+              colorInfo.name,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 12,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ],
+      );
+    } else {
+      // Basic color sample
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 80,
+            height: 50,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              color: colorInfo.color,
+            ),
+          ),
+          const SizedBox(height: 4),
+          SizedBox(
+            width: 80,
+            child: Text(
+              colorInfo.name,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 12,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ],
+      );
+    }
+  }
+
+  Widget _buildTheoryTip(String tip) {
+    return Container(
+      margin: const EdgeInsets.only(top: 8, bottom: 24),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.amber.shade900.withOpacity(0.3),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: Colors.amber.shade700.withOpacity(0.5),
+          width: 1,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.lightbulb,
+            color: Colors.amber.shade300,
+            size: 24,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              tip,
+              style: TextStyle(
+                color: Colors.amber.shade100,
+                fontSize: 14,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -790,6 +1329,27 @@ class _NeuronConnection {
     required this.color,
     required this.pulseOffset,
     required this.pulseSpeed,
+  });
+}
+
+// Helper class for color theory information
+class ColorInfo {
+  final Color color;
+  final String name;
+  final Color? complementary;
+  final Color? secondColor;
+  final Color? resultColor;
+  final int proportion;
+  final int secondProportion;
+
+  ColorInfo(
+    this.color,
+    this.name, {
+    this.complementary,
+    this.secondColor,
+    this.resultColor,
+    this.proportion = 1,
+    this.secondProportion = 1,
   });
 }
 

@@ -3,7 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_vector_icons/flutter_vector_icons.dart';
 import 'package:go_router/go_router.dart';
+import 'package:palette_master/features/shared/providers/sound_controller.dart';
 import 'package:palette_master/router/routes.dart';
+
+import '../shared/providers/interstitial_ad_controller.dart';
 
 class GameSelectionScreen extends ConsumerStatefulWidget {
   const GameSelectionScreen({super.key});
@@ -89,6 +92,8 @@ class _GameSelectionScreenState extends ConsumerState<GameSelectionScreen> with 
   @override
   void initState() {
     super.initState();
+    ref.read(soundControllerProvider.notifier).playBgm();
+
     _pageController = PageController(
       viewportFraction: 0.85,
       initialPage: _currentPage,
@@ -161,6 +166,8 @@ class _GameSelectionScreenState extends ConsumerState<GameSelectionScreen> with 
 
   @override
   Widget build(BuildContext context) {
+    final adLoaded = ref.watch(interstitialAdProvider);
+
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
@@ -185,7 +192,10 @@ class _GameSelectionScreenState extends ConsumerState<GameSelectionScreen> with 
               Feather.help_circle,
               color: Colors.white,
             ),
-            onPressed: () => context.pushNamed(AppRoutes.tutorial.name),
+            onPressed: () {
+              context.pushNamed(AppRoutes.tutorial.name);
+              ref.read(soundControllerProvider.notifier).playClick();
+            },
           ),
           // Achievements
           IconButton(
@@ -193,7 +203,10 @@ class _GameSelectionScreenState extends ConsumerState<GameSelectionScreen> with 
               Feather.award,
               color: Colors.white,
             ),
-            onPressed: () => context.pushNamed(AppRoutes.achievements.name),
+            onPressed: () {
+              context.pushNamed(AppRoutes.achievements.name);
+              ref.read(soundControllerProvider.notifier).playClick();
+            },
           ),
           // Settings
           IconButton(
@@ -201,7 +214,10 @@ class _GameSelectionScreenState extends ConsumerState<GameSelectionScreen> with 
               Feather.settings,
               color: Colors.white,
             ),
-            onPressed: () => context.pushNamed(AppRoutes.settings.name),
+            onPressed: () {
+              context.pushNamed(AppRoutes.settings.name);
+              ref.read(soundControllerProvider.notifier).playClick();
+            },
           ),
         ],
       ),
@@ -294,6 +310,7 @@ class _GameSelectionScreenState extends ConsumerState<GameSelectionScreen> with 
                       setState(() {
                         _currentPage = index;
                       });
+                      ref.read(soundControllerProvider.notifier).playEffect(SoundType.click);
                     },
                     itemBuilder: (context, index) {
                       final game = _games[index];
@@ -455,20 +472,23 @@ class _GameSelectionScreenState extends ConsumerState<GameSelectionScreen> with 
                                   Center(
                                     child: ElevatedButton(
                                       onPressed: () {
-                                        final route = game['route'] as AppRoute;
-                                        final params = game['params'] as Map<String, String>? ?? {};
+                                        ref.read(soundControllerProvider.notifier).playClick();
+                                        ref.read(interstitialAdProvider.notifier).showAdIfLoaded(() {
+                                          final route = game['route'] as AppRoute;
+                                          final params = game['params'] as Map<String, String>? ?? {};
 
-                                        // Add level parameter (start at level 1)
-                                        params['level'] = '1';
-                                        params['gameType'] = game['gameType'];
+                                          // Add level parameter (start at level 1)
+                                          params['level'] = '1';
+                                          params['gameType'] = game['gameType'];
 
-                                        // For direct game routes, use puzzleId parameter
-                                        params['id'] = _getPuzzleIdFromTitle(game['title']);
+                                          // For direct game routes, use puzzleId parameter
+                                          params['id'] = _getPuzzleIdFromTitle(game['title']);
 
-                                        context.pushNamed(
-                                          route.name,
-                                          queryParameters: params,
-                                        );
+                                          context.pushNamed(
+                                            route.name,
+                                            queryParameters: params,
+                                          );
+                                        });
                                       },
                                       style: ElevatedButton.styleFrom(
                                         backgroundColor: Colors.white,

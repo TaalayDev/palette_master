@@ -1,6 +1,5 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:palette_master/core/color_models/color_mixer.dart';
 import 'package:palette_master/features/puzzles/models/puzzle.dart';
 
 /// Generator for Classic Mixing game levels

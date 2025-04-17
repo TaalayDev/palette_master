@@ -10,6 +10,7 @@ import 'package:palette_master/features/puzzles/widgets/level_completion_animati
 import 'package:palette_master/router/routes.dart';
 import 'package:vibration/vibration.dart';
 
+import '../shared/providers/game_progress_provider.dart';
 import 'games/color_bubble.dart';
 
 class ColorBubbleScreen extends ConsumerStatefulWidget {

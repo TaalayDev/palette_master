@@ -10,6 +10,8 @@ import 'package:palette_master/router/routes.dart';
 import 'package:vibration/vibration.dart';
 import 'dart:math';
 
+import '../shared/providers/game_progress_provider.dart';
+
 class ColorBalanceScreen extends ConsumerStatefulWidget {
   final String puzzleId;
   final int level;

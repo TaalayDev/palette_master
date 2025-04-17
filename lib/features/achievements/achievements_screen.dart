@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:palette_master/core/constants/app_constants.dart';
+import 'package:palette_master/core/services/achievments-service.dart';
+
+import 'package:vibration/vibration.dart';
+
+import '../shared/providers/sound_controller.dart';
 
 class AchievementsScreen extends ConsumerWidget {
   const AchievementsScreen({super.key});
@@ -8,6 +13,7 @@ class AchievementsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final achievementsState = ref.watch(achievementsProvider);
 
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -17,180 +23,104 @@ class AchievementsScreen extends ConsumerWidget {
         elevation: 0,
         foregroundColor: isDarkMode ? Colors.white : const Color(0xFF4F378B),
       ),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: isDarkMode
-                ? [
-                    const Color(0xFF2C2C3E),
-                    const Color(0xFF1C1B26),
-                  ]
-                : [
-                    const Color(0xFFE9DEFF),
-                    const Color(0xFFFFD8E7),
-                  ],
-          ),
-        ),
+      body: GradientBackground(
+        colors: isDarkMode
+            ? [
+                const Color(0xFF2C2C3E),
+                const Color(0xFF1C1B26),
+              ]
+            : [
+                const Color(0xFFE9DEFF),
+                const Color(0xFFFFD8E7),
+              ],
         child: SafeArea(
-          child: CustomScrollView(
-            physics: const BouncingScrollPhysics(),
-            slivers: [
-              // Header section
-              SliverToBoxAdapter(
-                child: _buildHeaderSection(context),
-              ),
-
-              // Main content
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                sliver: SliverList(
-                  delegate: SliverChildListDelegate([
-                    // Achievement categories
-                    _buildAchievementCategory(
-                      context,
-                      title: 'Color Mixing',
-                      iconData: Icons.palette,
-                      achievements: [
-                        _buildAchievement(
-                          context,
-                          title: 'Color Apprentice',
-                          description: 'Complete 5 color mixing puzzles',
-                          icon: Icons.palette,
-                          isUnlocked: true,
-                          progress: 1.0,
-                          rewardPoints: 100,
-                        ),
-                        _buildAchievement(
-                          context,
-                          title: 'Mixing Master',
-                          description: 'Create 20 perfect color matches',
-                          icon: Icons.auto_awesome,
-                          isUnlocked: false,
-                          progress: 0.6,
-                          rewardPoints: 250,
-                        ),
-                        _buildAchievement(
-                          context,
-                          title: 'Pigment Virtuoso',
-                          description: 'Mix 5 colors to create a complex shade',
-                          icon: Icons.color_lens,
-                          isUnlocked: false,
-                          progress: 0.2,
-                          rewardPoints: 500,
-                        ),
-                      ],
+          child: achievementsState.isLoading
+              ? _buildLoadingIndicator()
+              : CustomScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  slivers: [
+                    // Header section
+                    SliverToBoxAdapter(
+                      child: _buildHeaderSection(context, achievementsState),
                     ),
 
-                    _buildAchievementCategory(
-                      context,
-                      title: 'Color Theory',
-                      iconData: Icons.lightbulb,
-                      achievements: [
-                        _buildAchievement(
-                          context,
-                          title: 'Complementary Expert',
-                          description: 'Complete all complementary color challenges',
-                          icon: Icons.contrast,
-                          isUnlocked: false,
-                          progress: 0.3,
-                          rewardPoints: 300,
-                        ),
-                        _buildAchievement(
-                          context,
-                          title: 'Harmony Seeker',
-                          description: 'Create 10 perfect color harmonies',
-                          icon: Icons.vibration,
-                          isUnlocked: false,
-                          progress: 0.0,
-                          rewardPoints: 400,
-                        ),
-                        _buildAchievement(
-                          context,
-                          title: 'Color Wheel Navigator',
-                          description: 'Identify all tertiary colors correctly',
-                          icon: Icons.track_changes,
-                          isUnlocked: false,
-                          progress: 0.0,
-                          rewardPoints: 350,
-                        ),
-                      ],
-                    ),
+                    // Main content
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                      sliver: SliverList(
+                        delegate: SliverChildListDelegate([
+                          // Achievement categories
+                          _buildAchievementCategory(
+                            context,
+                            ref,
+                            title: 'Color Mixing',
+                            iconData: Icons.palette,
+                            achievements: _filterAchievementsByIds(
+                              achievementsState.achievements,
+                              ['color_apprentice', 'mixing_master', 'pigment_virtuoso'],
+                            ),
+                          ),
 
-                    _buildAchievementCategory(
-                      context,
-                      title: 'Perception',
-                      iconData: Icons.visibility,
-                      achievements: [
-                        _buildAchievement(
-                          context,
-                          title: 'Optical Illusion Master',
-                          description: 'Complete 5 optical illusion puzzles',
-                          icon: Icons.remove_red_eye,
-                          isUnlocked: false,
-                          progress: 0.4,
-                          rewardPoints: 400,
-                        ),
-                        _buildAchievement(
-                          context,
-                          title: 'After-Image Observer',
-                          description: 'Successfully predict color after-images',
-                          icon: Icons.filter_center_focus,
-                          isUnlocked: false,
-                          progress: 0.0,
-                          rewardPoints: 350,
-                        ),
-                      ],
-                    ),
+                          _buildAchievementCategory(
+                            context,
+                            ref,
+                            title: 'Color Theory',
+                            iconData: Icons.lightbulb,
+                            achievements: _filterAchievementsByIds(
+                              achievementsState.achievements,
+                              ['complementary_expert', 'harmony_seeker', 'color_wheel_navigator'],
+                            ),
+                          ),
 
-                    _buildAchievementCategory(
-                      context,
-                      title: 'Mastery',
-                      iconData: Icons.emoji_events,
-                      achievements: [
-                        _buildAchievement(
-                          context,
-                          title: 'Color Theory Guru',
-                          description: 'Complete all puzzles with perfect scores',
-                          icon: Icons.emoji_events,
-                          isUnlocked: false,
-                          progress: 0.1,
-                          rewardPoints: 1000,
-                          isEpic: true,
-                        ),
-                        _buildAchievement(
-                          context,
-                          title: 'Speed Mixer',
-                          description: 'Complete any level in under 30 seconds',
-                          icon: Icons.speed,
-                          isUnlocked: false,
-                          progress: 0.0,
-                          rewardPoints: 500,
-                        ),
-                        _buildAchievement(
-                          context,
-                          title: 'Perfectly Balanced',
-                          description: 'Create an exact match with no color adjustments',
-                          icon: Icons.balance,
-                          isUnlocked: false,
-                          progress: 0.0,
-                          rewardPoints: 750,
-                          isEpic: true,
-                        ),
-                      ],
+                          _buildAchievementCategory(
+                            context,
+                            ref,
+                            title: 'Perception',
+                            iconData: Icons.visibility,
+                            achievements: _filterAchievementsByIds(
+                              achievementsState.achievements,
+                              ['optical_illusion_master', 'after_image_observer'],
+                            ),
+                          ),
+
+                          _buildAchievementCategory(
+                            context,
+                            ref,
+                            title: 'Mastery',
+                            iconData: Icons.emoji_events,
+                            achievements: _filterAchievementsByIds(
+                              achievementsState.achievements,
+                              ['color_theory_guru', 'speed_mixer', 'perfectly_balanced'],
+                            ),
+                          ),
+                        ]),
+                      ),
                     ),
-                  ]),
+                  ],
                 ),
-              ),
-            ],
-          ),
         ),
       ),
     );
   }
 
-  Widget _buildHeaderSection(BuildContext context) {
+  Widget _buildLoadingIndicator() {
+    return const Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          CircularProgressIndicator(),
+          SizedBox(height: 16),
+          Text('Loading achievements...'),
+        ],
+      ),
+    );
+  }
+
+  List<Achievement> _filterAchievementsByIds(List<Achievement> allAchievements, List<String> ids) {
+    return allAchievements.where((achievement) => ids.contains(achievement.id)).toList();
+  }
+
+  Widget _buildHeaderSection(BuildContext context, AchievementsState state) {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
     return Container(
@@ -216,7 +146,7 @@ class AchievementsScreen extends ConsumerWidget {
               children: [
                 _buildAchievementStat(
                   context,
-                  '1/15',
+                  '${state.unlockedCount}/${state.achievements.length}',
                   'Achieved',
                   Icons.emoji_events_rounded,
                   Colors.amber,
@@ -228,7 +158,7 @@ class AchievementsScreen extends ConsumerWidget {
                 ),
                 _buildAchievementStat(
                   context,
-                  '100',
+                  '${state.totalPoints}',
                   'Points',
                   Icons.star_rounded,
                   Colors.orange,
@@ -240,10 +170,10 @@ class AchievementsScreen extends ConsumerWidget {
                 ),
                 _buildAchievementStat(
                   context,
-                  'Bronze',
+                  state.userRank,
                   'Rank',
                   Icons.workspace_premium_rounded,
-                  Colors.brown.shade300,
+                  _getRankColor(state.userRank),
                 ),
               ],
             ),
@@ -273,6 +203,23 @@ class AchievementsScreen extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  Color _getRankColor(String rank) {
+    switch (rank) {
+      case 'Beginner':
+        return Colors.brown.shade300;
+      case 'Intermediate':
+        return Colors.grey.shade400;
+      case 'Advanced':
+        return Colors.grey.shade300;
+      case 'Expert':
+        return Colors.amber.shade300;
+      case 'Master':
+        return Colors.amber;
+      default:
+        return Colors.brown.shade300;
+    }
   }
 
   Widget _buildAchievementStat(
@@ -309,10 +256,11 @@ class AchievementsScreen extends ConsumerWidget {
   }
 
   Widget _buildAchievementCategory(
-    BuildContext context, {
+    BuildContext context,
+    WidgetRef ref, {
     required String title,
     required IconData iconData,
-    required List<Widget> achievements,
+    required List<Achievement> achievements,
   }) {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
@@ -341,35 +289,49 @@ class AchievementsScreen extends ConsumerWidget {
               ],
             ),
           ),
-          ...achievements,
+          if (achievements.isEmpty)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Text(
+                  'No achievements in this category yet.',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
+                  ),
+                ),
+              ),
+            )
+          else
+            ...achievements
+                .map((achievement) => _buildAchievement(
+                      context,
+                      ref,
+                      achievement: achievement,
+                    ))
+                .toList(),
         ],
       ),
     );
   }
 
   Widget _buildAchievement(
-    BuildContext context, {
-    required String title,
-    required String description,
-    required IconData icon,
-    required bool isUnlocked,
-    required double progress,
-    required int rewardPoints,
-    bool isEpic = false,
+    BuildContext context,
+    WidgetRef ref, {
+    required Achievement achievement,
   }) {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
-    final primaryColor = isEpic
-        ? (isUnlocked ? Colors.amber : Colors.grey)
-        : (isUnlocked ? Theme.of(context).colorScheme.primary : Colors.grey);
+    final primaryColor = achievement.isEpic
+        ? (achievement.isUnlocked ? Colors.amber : Colors.grey)
+        : (achievement.isUnlocked ? Theme.of(context).colorScheme.primary : Colors.grey);
 
     final bgColor = isDarkMode
-        ? (isUnlocked ? Colors.white.withOpacity(0.05) : Colors.white.withOpacity(0.02))
-        : (isUnlocked ? Colors.white : Colors.white.withOpacity(0.7));
+        ? (achievement.isUnlocked ? Colors.white.withOpacity(0.05) : Colors.white.withOpacity(0.02))
+        : (achievement.isUnlocked ? Colors.white : Colors.white.withOpacity(0.7));
 
-    final borderColor = isUnlocked ? primaryColor.withOpacity(0.5) : Colors.transparent;
+    final borderColor = achievement.isUnlocked ? primaryColor.withOpacity(0.5) : Colors.transparent;
 
-    final glowEffect = isUnlocked && isEpic;
+    final glowEffect = achievement.isUnlocked && achievement.isEpic;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -393,137 +355,285 @@ class AchievementsScreen extends ConsumerWidget {
                 ),
               ],
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => _onAchievementTap(context, ref, achievement),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Achievement icon
-                Container(
-                  width: 50,
-                  height: 50,
-                  decoration: BoxDecoration(
-                    color: isUnlocked
-                        ? (isEpic ? Colors.amber.withOpacity(0.2) : primaryColor.withOpacity(0.2))
-                        : Colors.grey.withOpacity(0.1),
-                    shape: BoxShape.circle,
-                    border:
-                        isEpic ? Border.all(color: isUnlocked ? Colors.amber : Colors.grey.shade400, width: 2) : null,
-                  ),
-                  child: Icon(
-                    icon,
-                    color: isUnlocked ? (isEpic ? Colors.amber : primaryColor) : Colors.grey.shade400,
-                    size: 28,
-                  ),
-                ),
+                Row(
+                  children: [
+                    // Achievement icon
+                    Container(
+                      width: 50,
+                      height: 50,
+                      decoration: BoxDecoration(
+                        color: achievement.isUnlocked
+                            ? (achievement.isEpic ? Colors.amber.withOpacity(0.2) : primaryColor.withOpacity(0.2))
+                            : Colors.grey.withOpacity(0.1),
+                        shape: BoxShape.circle,
+                        border: achievement.isEpic
+                            ? Border.all(color: achievement.isUnlocked ? Colors.amber : Colors.grey.shade400, width: 2)
+                            : null,
+                      ),
+                      child: Icon(
+                        achievement.icon,
+                        color: achievement.isUnlocked
+                            ? (achievement.isEpic ? Colors.amber : primaryColor)
+                            : Colors.grey.shade400,
+                        size: 28,
+                      ),
+                    ),
 
-                const SizedBox(width: 16),
+                    const SizedBox(width: 16),
 
-                // Achievement details
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+                    // Achievement details
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          if (isEpic)
-                            Padding(
-                              padding: const EdgeInsets.only(right: 6),
-                              child: Icon(
-                                Icons.auto_awesome_rounded,
-                                size: 16,
-                                color: isUnlocked ? Colors.amber : Colors.grey.shade400,
-                              ),
-                            ),
-                          Expanded(
-                            child: Text(
-                              title,
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: isUnlocked ? (isEpic ? Colors.amber : primaryColor) : Colors.grey.shade500,
-                              ),
-                            ),
-                          ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: isUnlocked
-                                  ? (isEpic ? Colors.amber.withOpacity(0.2) : primaryColor.withOpacity(0.2))
-                                  : Colors.grey.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(12),
-                              border: isEpic
-                                  ? Border.all(color: isUnlocked ? Colors.amber.shade200 : Colors.grey.shade300)
-                                  : null,
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.star_rounded,
-                                  size: 12,
-                                  color: isUnlocked ? (isEpic ? Colors.amber : primaryColor) : Colors.grey.shade400,
-                                ),
-                                const SizedBox(width: 3),
-                                Text(
-                                  '$rewardPoints',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.bold,
-                                    color: isUnlocked ? (isEpic ? Colors.amber : primaryColor) : Colors.grey.shade400,
+                          Row(
+                            children: [
+                              if (achievement.isEpic)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 6),
+                                  child: Icon(
+                                    Icons.auto_awesome_rounded,
+                                    size: 16,
+                                    color: achievement.isUnlocked ? Colors.amber : Colors.grey.shade400,
                                   ),
                                 ),
-                              ],
+                              Expanded(
+                                child: Text(
+                                  achievement.title,
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                    color: achievement.isUnlocked
+                                        ? (achievement.isEpic ? Colors.amber : primaryColor)
+                                        : Colors.grey.shade500,
+                                  ),
+                                ),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: achievement.isUnlocked
+                                      ? (achievement.isEpic
+                                          ? Colors.amber.withOpacity(0.2)
+                                          : primaryColor.withOpacity(0.2))
+                                      : Colors.grey.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: achievement.isEpic
+                                      ? Border.all(
+                                          color: achievement.isUnlocked ? Colors.amber.shade200 : Colors.grey.shade300)
+                                      : null,
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.star_rounded,
+                                      size: 12,
+                                      color: achievement.isUnlocked
+                                          ? (achievement.isEpic ? Colors.amber : primaryColor)
+                                          : Colors.grey.shade400,
+                                    ),
+                                    const SizedBox(width: 3),
+                                    Text(
+                                      '${achievement.rewardPoints}',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                        color: achievement.isUnlocked
+                                            ? (achievement.isEpic ? Colors.amber : primaryColor)
+                                            : Colors.grey.shade400,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            achievement.description,
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: achievement.isUnlocked ? null : Colors.grey.shade500,
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        description,
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: isUnlocked ? null : Colors.grey.shade500,
-                        ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                // Progress indicator
+                Stack(
+                  children: [
+                    // Background progress bar
+                    Container(
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: isDarkMode ? Colors.white.withOpacity(0.1) : Colors.grey.shade200,
+                        borderRadius: BorderRadius.circular(4),
                       ),
-                    ],
-                  ),
+                    ),
+                    // Actual progress
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 500),
+                      curve: Curves.easeInOut,
+                      height: 8,
+                      width: MediaQuery.of(context).size.width * 0.7 * achievement.progress,
+                      decoration: BoxDecoration(
+                        color: achievement.isUnlocked
+                            ? (achievement.isEpic ? Colors.amber : primaryColor)
+                            : (achievement.progress > 0 ? Colors.grey.shade400 : Colors.transparent),
+                        borderRadius: BorderRadius.circular(4),
+                        gradient: achievement.isUnlocked && achievement.isEpic
+                            ? const LinearGradient(
+                                colors: [Colors.amber, Colors.orange],
+                                begin: Alignment.centerLeft,
+                                end: Alignment.centerRight,
+                              )
+                            : null,
+                      ),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 8),
+
+                // Progress label
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      achievement.isUnlocked ? 'Complete!' : '${(achievement.progress * 100).toInt()}% complete',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: achievement.isUnlocked ? FontWeight.bold : FontWeight.normal,
+                        color: achievement.isUnlocked
+                            ? (achievement.isEpic ? Colors.amber : primaryColor)
+                            : Theme.of(context).textTheme.bodySmall?.color,
+                      ),
+                    ),
+                    if (!achievement.isUnlocked && achievement.progress > 0)
+                      TextButton(
+                        onPressed: () => _onContinueTap(context, achievement),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        child: const Text('Continue'),
+                      ),
+                  ],
                 ),
               ],
             ),
-            const SizedBox(height: 16),
+          ),
+        ),
+      ),
+    );
+  }
 
-            // Progress indicator
-            Stack(
-              children: [
-                // Background progress bar
-                Container(
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: isDarkMode ? Colors.white.withOpacity(0.1) : Colors.grey.shade200,
-                    borderRadius: BorderRadius.circular(4),
+  void _onAchievementTap(BuildContext context, WidgetRef ref, Achievement achievement) {
+    // Play sound effect
+    if (achievement.isUnlocked) {
+      final soundController = ref.read(soundControllerProvider.notifier);
+      soundController.playEffect(SoundType.achievement);
+    }
+
+    // Show details dialog
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            if (achievement.isEpic)
+              Padding(
+                padding: const EdgeInsets.only(right: 8.0),
+                child: Icon(
+                  Icons.auto_awesome,
+                  color: achievement.isUnlocked ? Colors.amber : Colors.grey,
+                  size: 24,
+                ),
+              ),
+            Expanded(
+              child: Text(
+                achievement.title,
+                style: TextStyle(
+                  color: achievement.isUnlocked
+                      ? (achievement.isEpic ? Colors.amber : Theme.of(context).colorScheme.primary)
+                      : Colors.grey,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Icon
+            Center(
+              child: Container(
+                width: 80,
+                height: 80,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: achievement.isUnlocked
+                      ? (achievement.isEpic
+                          ? Colors.amber.withOpacity(0.2)
+                          : Theme.of(context).colorScheme.primaryContainer)
+                      : Colors.grey.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: achievement.isUnlocked
+                        ? (achievement.isEpic ? Colors.amber : Theme.of(context).colorScheme.primary)
+                        : Colors.grey,
+                    width: 2,
                   ),
                 ),
-                // Actual progress
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 500),
-                  curve: Curves.easeInOut,
-                  height: 8,
-                  width: MediaQuery.of(context).size.width * 0.7 * progress,
-                  decoration: BoxDecoration(
-                    color: isUnlocked
-                        ? (isEpic ? Colors.amber : primaryColor)
-                        : (progress > 0 ? Colors.grey.shade400 : Colors.transparent),
-                    borderRadius: BorderRadius.circular(4),
-                    gradient: isUnlocked && isEpic
-                        ? const LinearGradient(
-                            colors: [Colors.amber, Colors.orange],
-                            begin: Alignment.centerLeft,
-                            end: Alignment.centerRight,
-                          )
-                        : null,
+                child: Icon(
+                  achievement.icon,
+                  color: achievement.isUnlocked
+                      ? (achievement.isEpic ? Colors.amber : Theme.of(context).colorScheme.primary)
+                      : Colors.grey,
+                  size: 40,
+                ),
+              ),
+            ),
+
+            // Description
+            Text(
+              achievement.description,
+              style: const TextStyle(fontSize: 16),
+            ),
+
+            const SizedBox(height: 12),
+
+            // Status
+            Row(
+              children: [
+                Icon(
+                  achievement.isUnlocked ? Icons.check_circle : Icons.hourglass_top,
+                  color: achievement.isUnlocked ? Colors.green : Colors.grey,
+                  size: 20,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  achievement.isUnlocked ? 'Unlocked' : '${(achievement.progress * 100).toInt()}% Progress',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: achievement.isUnlocked ? Colors.green : Colors.grey,
                   ),
                 ),
               ],
@@ -531,37 +641,95 @@ class AchievementsScreen extends ConsumerWidget {
 
             const SizedBox(height: 8),
 
-            // Progress label
+            // Reward
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
+                const Icon(
+                  Icons.star,
+                  color: Colors.amber,
+                  size: 20,
+                ),
+                const SizedBox(width: 8),
                 Text(
-                  isUnlocked ? 'Complete!' : '${(progress * 100).toInt()}% complete',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: isUnlocked ? FontWeight.bold : FontWeight.normal,
-                    color: isUnlocked
-                        ? (isEpic ? Colors.amber : primaryColor)
-                        : Theme.of(context).textTheme.bodySmall?.color,
+                  'Reward: ${achievement.rewardPoints} points',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.amber,
                   ),
                 ),
-                if (!isUnlocked && progress > 0)
-                  TextButton(
-                    onPressed: () {
-                      // In a real app, this would navigate to the relevant puzzle
-                    },
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    child: const Text('Continue'),
-                  ),
               ],
             ),
           ],
         ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+            },
+            child: const Text('Close'),
+          ),
+        ],
       ),
+    );
+  }
+
+  void _onContinueTap(BuildContext context, Achievement achievement) {
+    // Haptic feedback
+    Vibration.hasVibrator().then((hasVibrator) {
+      if (hasVibrator ?? false) {
+        Vibration.vibrate(duration: 20);
+      }
+    });
+
+    // Here you would navigate to the relevant puzzle type
+    // based on the achievement ID
+    final puzzleType = _getPuzzleTypeFromAchievement(achievement.id);
+
+    // You would implement navigation to the appropriate game screen
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Navigating to $puzzleType games...'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  String _getPuzzleTypeFromAchievement(String achievementId) {
+    // Map achievement IDs to puzzle types
+    if (['color_apprentice', 'mixing_master', 'pigment_virtuoso'].contains(achievementId)) {
+      return 'Color Mixing';
+    } else if (['complementary_expert', 'harmony_seeker', 'color_wheel_navigator'].contains(achievementId)) {
+      return 'Color Theory';
+    } else if (['optical_illusion_master', 'after_image_observer'].contains(achievementId)) {
+      return 'Optical Illusions';
+    } else {
+      return 'Game Selection';
+    }
+  }
+}
+
+// Simple gradient background widget (to be implemented in shared/widgets directory)
+class GradientBackground extends StatelessWidget {
+  final List<Color> colors;
+  final Widget child;
+
+  const GradientBackground({
+    super.key,
+    required this.colors,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: colors,
+        ),
+      ),
+      child: child,
     );
   }
 }

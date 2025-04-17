@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:palette_master/core/constants/app_constants.dart';
-import 'package:palette_master/theme/app_theme.dart';
 import 'package:url_launcher/url_launcher_string.dart';
+
+import '../../core/constants/app_constants.dart';
+import '../../theme/app_theme.dart';
+import '../shared/providers/sound_controller.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -10,6 +12,8 @@ class SettingsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeModeProvider);
+    final soundState = ref.watch(soundControllerProvider);
+
     final isDarkMode = themeMode == ThemeMode.dark ||
         (themeMode == ThemeMode.system && MediaQuery.of(context).platformBrightness == Brightness.dark);
 
@@ -79,96 +83,76 @@ class SettingsScreen extends ConsumerWidget {
 
                     const SizedBox(height: 16),
 
-                    // Accessibility settings
-                    // _buildSettingsCard(
-                    //   context,
-                    //   ref,
-                    //   title: 'Accessibility',
-                    //   icon: Icons.accessibility_new,
-                    //   children: [
-                    //     _buildSwitchItem(
-                    //       context,
-                    //       title: 'Color Blindness Mode',
-                    //       subtitle: 'Adjust colors for color vision deficiencies',
-                    //       value: false,
-                    //       onChanged: (value) {
-                    //         // Toggle color blindness mode
-                    //       },
-                    //     ),
-                    //     _buildDivider(),
-                    //     _buildSwitchItem(
-                    //       context,
-                    //       title: 'High Contrast',
-                    //       subtitle: 'Increase contrast for better visibility',
-                    //       value: false,
-                    //       onChanged: (value) {
-                    //         // Toggle high contrast mode
-                    //       },
-                    //     ),
-                    //     _buildDivider(),
-                    //     _buildSwitchItem(
-                    //       context,
-                    //       title: 'Reduced Motion',
-                    //       subtitle: 'Minimize animated effects',
-                    //       value: false,
-                    //       onChanged: (value) {
-                    //         // Toggle reduced motion
-                    //       },
-                    //     ),
-                    //   ],
-                    // ),
+                    // Sound settings
+                    _buildSettingsCard(
+                      context,
+                      ref,
+                      title: 'Sound Settings',
+                      icon: Icons.volume_up,
+                      children: [
+                        _buildSwitchItem(
+                          context,
+                          title: 'Sound Effects',
+                          subtitle: 'Play sounds during gameplay',
+                          value: soundState.isSoundEnabled,
+                          onChanged: (value) {
+                            ref.read(soundControllerProvider.notifier).setSoundEnabled(value);
+                          },
+                        ),
+                        _buildDivider(),
+                        _buildSwitchItem(
+                          context,
+                          title: 'Background Music',
+                          subtitle: 'Play music during gameplay',
+                          value: soundState.isMusicEnabled,
+                          onChanged: (value) {
+                            ref.read(soundControllerProvider.notifier).setMusicEnabled(value);
+                          },
+                        ),
+                        _buildDivider(),
+                        _buildSwitchItem(
+                          context,
+                          title: 'Haptic Feedback',
+                          subtitle: 'Vibrate on interactions',
+                          value: soundState.isVibrationEnabled,
+                          onChanged: (value) {
+                            ref.read(soundControllerProvider.notifier).setVibrationEnabled(value);
+                          },
+                        ),
+                        _buildDivider(),
+                        _buildVolumeSlider(
+                          context,
+                          ref,
+                          title: 'Sound Volume',
+                          value: soundState.soundVolume,
+                          icon: Icons.volume_up,
+                          onChanged: (value) {
+                            ref.read(soundControllerProvider.notifier).setSoundVolume(value);
+                            // Play a test sound effect to demonstrate the volume
+                            if (soundState.isSoundEnabled) {
+                              ref.read(soundControllerProvider.notifier).playEffect(SoundType.click);
+                            }
+                          },
+                        ),
+                        _buildDivider(),
+                        _buildVolumeSlider(
+                          context,
+                          ref,
+                          title: 'Music Volume',
+                          value: soundState.musicVolume,
+                          icon: Icons.music_note,
+                          onChanged: (value) async {
+                            await ref.read(soundControllerProvider.notifier).setMusicVolume(value);
+                            // If music is not currently playing, play a short sample
+                            if (soundState.isMusicEnabled) {
+                              ref.read(soundControllerProvider.notifier).playBgm();
+                            }
+                          },
+                        ),
+                      ],
+                    ),
 
-                    // const SizedBox(height: 16),
-
-                    // Game settings
-                    // _buildSettingsCard(
-                    //   context,
-                    //   ref,
-                    //   title: 'Game Settings',
-                    //   icon: Icons.games,
-                    //   children: [
-                    //     _buildSwitchItem(
-                    //       context,
-                    //       title: 'Sound Effects',
-                    //       subtitle: 'Play sounds during gameplay',
-                    //       value: true,
-                    //       onChanged: (value) {
-                    //         // Toggle sound effects
-                    //       },
-                    //     ),
-                    //     _buildDivider(),
-                    //     _buildSwitchItem(
-                    //       context,
-                    //       title: 'Haptic Feedback',
-                    //       subtitle: 'Vibrate on interactions',
-                    //       value: true,
-                    //       onChanged: (value) {
-                    //         // Toggle haptic feedback
-                    //       },
-                    //     ),
-                    //     _buildDivider(),
-                    //     _buildSliderItem(
-                    //       context,
-                    //       title: 'Difficulty',
-                    //       value: 0.5,
-                    //       min: 0.0,
-                    //       max: 1.0,
-                    //       labels: {
-                    //         0.0: 'Easy',
-                    //         0.33: 'Medium',
-                    //         0.67: 'Hard',
-                    //         1.0: 'Expert',
-                    //       },
-                    //       onChanged: (value) {
-                    //         // Adjust difficulty
-                    //       },
-                    //     ),
-                    //     _buildDivider(),
-                    //     _buildResetButton(context),
-                    //   ],
-                    // ),
-
-                    // const SizedBox(height: 16),
+                    const SizedBox(height: 16),
 
                     // About section
                     _buildSettingsCard(
@@ -474,6 +458,109 @@ class SettingsScreen extends ConsumerWidget {
     );
   }
 
+  Widget _buildVolumeSlider(
+    BuildContext context,
+    WidgetRef ref, {
+    required String title,
+    required double value,
+    required IconData icon,
+    required ValueChanged<double> onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.3),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  icon,
+                  color: Theme.of(context).colorScheme.primary,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '${(value * 100).toInt()}%',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 4,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
+              valueIndicatorShape: const PaddleSliderValueIndicatorShape(),
+              showValueIndicator: ShowValueIndicator.always,
+            ),
+            child: Slider(
+              value: value,
+              min: 0.0,
+              max: 1.0,
+              divisions: 10,
+              label: '${(value * 100).toInt()}%',
+              onChanged: onChanged,
+            ),
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                '0%',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: Theme.of(context).colorScheme.onSurface.withOpacity(0.5),
+                ),
+              ),
+              Text(
+                '50%',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: Theme.of(context).colorScheme.onSurface.withOpacity(0.5),
+                ),
+              ),
+              Text(
+                '100%',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: Theme.of(context).colorScheme.onSurface.withOpacity(0.5),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildColorItem(
     BuildContext context, {
     required String title,
@@ -596,200 +683,6 @@ class SettingsScreen extends ConsumerWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildSliderItem(
-    BuildContext context, {
-    required String title,
-    required double value,
-    required double min,
-    required double max,
-    required Map<double, String> labels,
-    required ValueChanged<double> onChanged,
-  }) {
-    // Find the closest label for the current value
-    String currentLabel = '';
-    double closestKey = min;
-    double smallestDifference = double.infinity;
-
-    for (final entry in labels.entries) {
-      final difference = (entry.key - value).abs();
-      if (difference < smallestDifference) {
-        smallestDifference = difference;
-        closestKey = entry.key;
-        currentLabel = entry.value;
-      }
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.3),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(
-                  Icons.tune,
-                  color: Theme.of(context).colorScheme.primary,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 16),
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  currentLabel,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          SliderTheme(
-            data: SliderTheme.of(context).copyWith(
-              trackHeight: 4,
-              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
-              overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
-              valueIndicatorShape: const PaddleSliderValueIndicatorShape(),
-              showValueIndicator: ShowValueIndicator.always,
-            ),
-            child: Slider(
-              value: value,
-              min: min,
-              max: max,
-              divisions: ((max - min) * 10).toInt(),
-              label: currentLabel,
-              onChanged: onChanged,
-            ),
-          ),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: labels.entries.map((entry) {
-              return Text(
-                entry.value,
-                style: TextStyle(
-                  fontSize: 10,
-                  color: closestKey == entry.key
-                      ? Theme.of(context).colorScheme.primary
-                      : Theme.of(context).colorScheme.onSurface.withOpacity(0.5),
-                  fontWeight: closestKey == entry.key ? FontWeight.bold : FontWeight.normal,
-                ),
-              );
-            }).toList(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildResetButton(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-      child: Row(
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.error.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(
-              Icons.restart_alt,
-              color: Theme.of(context).colorScheme.error,
-              size: 20,
-            ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Reset All Progress',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Theme.of(context).colorScheme.error,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'Delete all achievements and game progress',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              // Show confirmation dialog
-              showDialog(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: const Text('Reset Progress'),
-                  content: const Text(
-                    'Are you sure you want to reset all your progress? This cannot be undone.',
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () {
-                        Navigator.of(context).pop();
-                      },
-                      child: const Text('Cancel'),
-                    ),
-                    ElevatedButton(
-                      onPressed: () {
-                        // Reset progress logic would go here
-                        Navigator.of(context).pop();
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Theme.of(context).colorScheme.error,
-                        foregroundColor: Theme.of(context).colorScheme.onError,
-                      ),
-                      child: const Text('Reset'),
-                    ),
-                  ],
-                ),
-              );
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.error,
-              foregroundColor: Theme.of(context).colorScheme.onError,
-              elevation: 0,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            ),
-            child: const Text('Reset'),
-          ),
-        ],
       ),
     );
   }
