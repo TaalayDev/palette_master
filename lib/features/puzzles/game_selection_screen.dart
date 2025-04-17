@@ -193,8 +193,8 @@ class _GameSelectionScreenState extends ConsumerState<GameSelectionScreen> with 
               color: Colors.white,
             ),
             onPressed: () {
-              context.pushNamed(AppRoutes.tutorial.name);
               ref.read(soundControllerProvider.notifier).playClick();
+              context.pushNamed(AppRoutes.tutorial.name);
             },
           ),
           // Achievements
@@ -204,8 +204,8 @@ class _GameSelectionScreenState extends ConsumerState<GameSelectionScreen> with 
               color: Colors.white,
             ),
             onPressed: () {
-              context.pushNamed(AppRoutes.achievements.name);
               ref.read(soundControllerProvider.notifier).playClick();
+              context.pushNamed(AppRoutes.achievements.name);
             },
           ),
           // Settings
@@ -215,8 +215,8 @@ class _GameSelectionScreenState extends ConsumerState<GameSelectionScreen> with 
               color: Colors.white,
             ),
             onPressed: () {
-              context.pushNamed(AppRoutes.settings.name);
               ref.read(soundControllerProvider.notifier).playClick();
+              context.pushNamed(AppRoutes.settings.name);
             },
           ),
         ],
