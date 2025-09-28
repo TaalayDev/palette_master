@@ -273,22 +273,6 @@ class _GameSelectionScreenState extends ConsumerState<GameSelectionScreen> with 
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Color Theory Games',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 32,
-                          fontWeight: FontWeight.bold,
-                          shadows: [
-                            Shadow(
-                              color: Colors.black.withOpacity(0.3),
-                              blurRadius: 8,
-                              offset: const Offset(0, 3),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
                         'Choose a game mode to start mastering color theory through interactive play',
                         style: TextStyle(
                           color: Colors.white.withOpacity(0.7),
@@ -299,7 +283,7 @@ class _GameSelectionScreenState extends ConsumerState<GameSelectionScreen> with 
                   ),
                 ),
 
-                const SizedBox(height: 16),
+                const SizedBox(height: 8),
 
                 // Game carousel
                 Expanded(
